@@ -23,10 +23,15 @@
 
 1. `.github/ISSUE_TEMPLATE/{feature_request,bug_report}.md` からテンプレート本文を `load_template_content` で読み込み（frontmatter はスキップ）
 2. `TemplateDetector` がタイトル/本文のキーワードに対してスコアをつけ、`feature_request` / `bug_report` を選定（スコアゼロ時は `feature_request`）
-3. `get_improve_prompt` でテンプレート + Issue 記述を LLM プロンプトに変換
-4. `LLMClient`（`gemini-2.5-flash`）で `generate` を呼び出し、出力を `format_comment` で整形
-5. `post_comment_via_gh` が `gh issue comment` で Issue に投稿し、`ai-processing` → `ai-processed` のラベル遷移を行う
-6. `--dry-run` モードではコメント投稿をスキップし、結果を標準出力に表示
+3. **RAG環境変数チェック**（Phase 2）:
+   - `QDRANT_URL`, `QDRANT_API_KEY`, `VOYAGE_API_KEY`（または `GEMINI_API_KEY`）の存在を確認
+   - **全て揃っている場合**: RAG検索を実行し、類似Issue情報を取得
+   - **不足している場合**: RAGをスキップし、Phase 1モード（RAGなし）で動作
+   - ログに動作モードを出力（`[INFO] RAG mode: enabled` / `[INFO] RAG mode: disabled (missing: QDRANT_URL)`）
+4. `get_improve_prompt` または `get_improve_prompt_with_rag` でプロンプトを構築
+5. `LLMClient`（`gemini-2.5-flash`）で `generate` を呼び出し、出力を `format_comment` で整形
+6. `post_comment_via_gh` が `gh issue comment` で Issue に投稿し、`ai-processing` → `ai-processed` のラベル遷移を行う
+7. `--dry-run` モードではコメント投稿をスキップし、結果を標準出力に表示
 
 #### ローカル検証モード
 
@@ -223,6 +228,23 @@ jobs:
 Phase 2以降で、`improve_issue.py` に以下の機能を追加統合：
 
 ```python
+# RAG環境変数チェック
+def check_rag_availability() -> tuple[bool, list[str]]:
+    """RAG機能の利用可否を判定
+    
+    Returns:
+        (is_available, missing_vars): RAG利用可能か、不足している環境変数のリスト
+    """
+    required_vars = ['QDRANT_URL', 'QDRANT_API_KEY']
+    # Embedding APIはVOYAGE_API_KEYまたはGEMINI_API_KEYのいずれか
+    has_embedding_api = os.getenv('VOYAGE_API_KEY') or os.getenv('GEMINI_API_KEY')
+    
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if not has_embedding_api:
+        missing.append('VOYAGE_API_KEY or GEMINI_API_KEY')
+    
+    return (len(missing) == 0, missing)
+
 # Voyage AI Embeddingクライアント
 class VoyageEmbeddingClient:
     def __init__(self, api_key: str, model: str = 'voyage-3.5-lite'):
