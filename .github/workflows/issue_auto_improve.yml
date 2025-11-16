@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 3
     
+    permissions:
+      contents: read
+      issues: write
+    
     # Issue作成時のみ実行（ai-processing, ai-processed ラベルがない場合）
     if: |
       github.event.action == 'opened' &&
@@ -65,6 +69,10 @@ jobs:
   update-index:
     runs-on: ubuntu-slim
     timeout-minutes: 1
+    
+    permissions:
+      contents: read
+      issues: read
     
     # Issue更新時またはコメント投稿時のみ実行
     if: |
