@@ -1,0 +1,30 @@
+{
+	"name": "dev",
+	// "image": "python:3.13-bookworm",
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+	},
+
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"ms-python.python",
+				"ms-python.mypy-type-checker",
+				"charliermarsh.ruff",
+			],
+			// Set *default* container specific settings.json values on container create.
+			"settings": {
+				"[python]": {
+					"editor.defaultFormatter": "charliermarsh.ruff"
+				},
+			}
+		}
+	},
+
+	"onCreateCommand": "bash .devcontainer/on_create_command.sh",
+	// "postCreateCommand": "bash .devcontainer/post_create_command.sh",
+	// "postStartCommand": "bash .devcontainer/post_start_command.sh"
+}
