@@ -1,0 +1,57 @@
+name: Issue Auto Improve (Phase 1)
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  improve-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    # スキップ条件: no-ai-assist, ai-processing, ai-processed ラベルがついている場合
+    if: |
+      !contains(github.event.issue.labels.*.name, 'no-ai-assist') &&
+      !contains(github.event.issue.labels.*.name, 'ai-processing') &&
+      !contains(github.event.issue.labels.*.name, 'ai-processed')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      
+      - name: Add processing label
+        run: |
+          gh issue edit ${{ github.event.issue.number }} --add-label "ai-processing"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Improve issue content
+        id: improve
+        run: |
+          uv run .github/scripts/improve_issue.py
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+      
+      - name: Mark as processed
+        if: success()
+        run: |
+          gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing" --add-label "ai-processed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Remove processing label on failure
+        if: failure()
+        run: |
+          gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
