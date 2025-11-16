@@ -6,12 +6,11 @@ on:
 
 jobs:
   improve-issue:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
     
-    # スキップ条件: no-ai-assist, ai-processing, ai-processed ラベルがついている場合
+    # スキップ条件: ai-processing, ai-processed ラベルがついている場合
     if: |
-      !contains(github.event.issue.labels.*.name, 'no-ai-assist') &&
       !contains(github.event.issue.labels.*.name, 'ai-processing') &&
       !contains(github.event.issue.labels.*.name, 'ai-processed')
     

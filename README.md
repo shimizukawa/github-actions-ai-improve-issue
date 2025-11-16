@@ -16,7 +16,7 @@
 以下の条件を満たすIssueが処理対象となります：
 
 - タイトルと本文（空白除く）の合計が10文字以上
-- `no-ai-assist`, `ai-processing`, `ai-processed` ラベルがついていない
+- `ai-processing`, `ai-processed` ラベルがついていない
 
 ## 使い方
 
@@ -32,8 +32,9 @@
 
 ```bash
 # 環境変数設定
-export ISSUE_BODY="想定運転データの一括登録機能を追加したい"
-export ISSUE_TITLE="想定運転データCSV一括登録機能"
+
+export ISSUE_TITLE="Mermaid図の拡大縮小機能"
+export ISSUE_BODY="ページ編集 でMermaid図の部分だけ別ウインドウで表示して拡大縮小したい。ページ全体の編集ではプレビューの縦位置がずれてしまうため使いづらい"
 export ISSUE_NUMBER="123"
 export LLM_API_KEY="your-gemini-api-key"
 
@@ -47,10 +48,8 @@ Issue本文とタイトルから、以下のテンプレートを自動判定し
 
 | テンプレート | キーワード例 | 用途 |
 |------------|------------|------|
-| feature-1 | 機能、追加、変更、改善、したい | 機能要件（親Issue） |
-| feature-2-design | 設計、アーキテクチャ、技術選定、実装方針 | 機能設計（子Issue） |
+| feature_request | 機能、追加、変更、改善、したい | 機能要件 |
 | bug_report | バグ、エラー、不具合、動かない | バグ報告 |
-| feature-3-coding | 実装、コーディング、テスト、PR | 実装タスク |
 
 ## Phase 1の実装範囲
 
@@ -71,17 +70,15 @@ Issue本文とタイトルから、以下のテンプレートを自動判定し
 
 ### ラベルによる制御
 
-- `no-ai-assist` ラベル: 自動処理をスキップ
-- `ai-processing` ラベル: 処理中（自動付与・削除）
-- `ai-processed` ラベル: 処理完了（自動付与、再実行防止）
+- `ai-processing` ラベル: 処理中
+- `ai-processed` ラベル: 処理完了、自動処理をスキップ
 
 ## トラブルシューティング
 
 ### Workflowが起動しない
 
-- Issue本文が200文字を超えていないか確認
-- `no-ai-assist` ラベルがついていないか確認
-- テンプレートマーカー（`## 背景・目的`等）が既に含まれていないか確認
+- Issue本文が10文字以上あるか確認
+- `ai-processing`, `ai-processed` ラベルがついていないか確認
 
 ### エラーコメントが投稿される
 
@@ -93,12 +90,15 @@ Issue本文とタイトルから、以下のテンプレートを自動判定し
 ### ファイル構成
 
 ```
+README.md                       # this file
 .github/
+├── ISSUE_TEMPLATE/             # templates
+│   ├── bug_report.md
+│   └── feature_request.md
 ├── scripts/
-│   ├── improve_issue.py     # メインスクリプト（PEP-723対応）
-│   └── README.md            # このファイル
+│   └── improve_issue.py        # main script
 └── workflows/
-    └── issue_auto_improve.yml  # GitHub Actions Workflow
+	└── issue_auto_improve.yml  # GitHub Actions Workflow
 ```
 
 ### 依存関係
@@ -113,7 +113,7 @@ PEP-723に従い、スクリプト内で依存関係を定義：
 # ///
 ```
 
-`uv run` コマンドで実行すると、自動的に依存関係がインストールされます。
+`uv run` コマンドで実行すると、自動的に依存関係のインストール後に実行されます。
 
 ### 実装モード
 

@@ -29,13 +29,11 @@ except ImportError:
     sys.exit(1)
 
 # 型定義
-TemplateType = Literal[
-    "feature-1", "feature-2-design", "bug_report", "feature-3-coding"
-]
+TemplateType = Literal["feature_request", "bug_report"]
 
 # テンプレートタイプに応じた役割と指示
 ROLE_AND_INSTRUCTIONS = {
-    "feature-1": """あなたはプロジェクト管理の専門家です。以下のIssue記述を、機能要件テンプレートに沿った具体的で詳細な内容に拡張してください。
+    "feature_request": """あなたはプロジェクト管理の専門家です。以下のIssue記述を、機能要件テンプレートに沿った具体的で詳細な内容に拡張してください。
 
 【重要な指示】
 - 抽象的な表現を避け、具体的に記述してください
@@ -43,23 +41,11 @@ ROLE_AND_INSTRUCTIONS = {
 - 不明な点は「要確認」として明示してください
 - Markdown形式で出力してください
 - 各項目は箇条書きで、少なくとも2-3項目記述してください""",
-    "feature-2-design": """あなたはソフトウェア設計の専門家です。以下のIssue記述を、機能設計テンプレートに沿った具体的な内容に拡張してください。
-
-【重要な指示】
-- 技術的な観点から具体的に記述してください
-- 複数の選択肢がある場合は比較検討を記載してください
-- Markdown形式で出力してください""",
     "bug_report": """あなたはソフトウェアテストの専門家です。以下のバグ報告を、詳細で再現可能な形式に拡張してください。
 
 【重要な指示】
 - 再現手順を具体的に記述してください
 - エラーメッセージやスクリーンショットの必要性を明示してください
-- Markdown形式で出力してください""",
-    "feature-3-coding": """あなたはソフトウェアエンジニアです。以下の実装タスクを、具体的なチェックリスト形式に拡張してください。
-
-【重要な指示】
-- 実装範囲を具体的に記述してください
-- テストケースを明示してください
 - Markdown形式で出力してください""",
 }
 
@@ -103,7 +89,9 @@ def get_improve_prompt(
     # テンプレートファイルから実際の内容を読み込む
     template_content = load_template_content(template_name)
 
-    role = ROLE_AND_INSTRUCTIONS.get(template_name, ROLE_AND_INSTRUCTIONS["feature-1"])
+    role = ROLE_AND_INSTRUCTIONS.get(
+        template_name, ROLE_AND_INSTRUCTIONS["feature_request"]
+    )
 
     prompt = f"""{role}
 
@@ -125,38 +113,30 @@ def get_improve_prompt(
 class TemplateDetector:
     """Issue内容からテンプレートを判定"""
 
-    KEYWORDS = {
-        "feature-1": ["機能", "追加", "変更", "改善", "したい", "欲しい", "必要"],
-        "feature-2-design": [
-            "設計",
-            "アーキテクチャ",
-            "技術選定",
-            "実装方針",
-            "設計書",
-        ],
+    KEYWORDS: dict[TemplateType, list[str]] = {
+        "feature_request": ["機能", "追加", "変更", "改善", "したい", "欲しい", "必要"],
         "bug_report": ["バグ", "エラー", "不具合", "動かない", "失敗", "問題"],
-        "feature-3-coding": ["実装", "コーディング", "テスト", "PR", "修正"],
     }
 
     def detect(self, issue_body: str, issue_title: str = "") -> TemplateType:
         """Issue本文とタイトルからテンプレートを判定（キーワードベース）"""
         text = f"{issue_title} {issue_body}".lower()
 
-        scores = {}
+        scores: dict[TemplateType, int] = {}
         for template, keywords in self.KEYWORDS.items():
             score = sum(1 for keyword in keywords if keyword in text)
             scores[template] = score
 
         if not scores:
-            return "feature-1"
+            return "feature_request"
 
-        best_template = max(scores, key=scores.get)
+        selected_tmpl = max(scores, key=scores.get)
 
-        # スコアが0の場合（キーワードマッチなし）はデフォルトでfeature-1
-        if scores[best_template] == 0:
-            return "feature-1"
+        # スコアが0の場合（キーワードマッチなし）はデフォルトでfeature_request
+        if scores[selected_tmpl] == 0:
+            return "feature_request"
 
-        return best_template
+        return selected_tmpl
 
 
 # ==================== LLMクライアント ====================
@@ -269,10 +249,8 @@ def format_comment(improved_content: str, template_name: str) -> str:
         フォーマット済みのコメント文字列
     """
     template_display_names = {
-        "feature-1": "機能要件（親Issue）",
-        "feature-2-design": "機能設計（子Issue）",
+        "feature_request": "機能要件",
         "bug_report": "バグ報告",
-        "feature-3-coding": "実装タスク",
     }
     template_display = template_display_names.get(template_name, template_name)
 

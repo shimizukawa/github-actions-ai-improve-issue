@@ -71,11 +71,12 @@ Markdown形式で、テンプレートの各項目を埋めてください。
 **Phase 2代替案**: Gemini 2.5 Flash（コスト重視の場合）
 - Claude 3.7の約1/10のコストで中程度の品質
 
-### 2. GitHub Actions Workflow実装
+### 2. GitHub Actions Workflow
 
 #### 検証内容
 
-**基本Workflow構造:**
+本番用 `issue_auto_improve.yml` は以下の構成で、`ai-processing` / `ai-processed` ラベルをもとに重複処理を防ぎつつ `uv run` スクリプトを実行し、成功時に `ai-processed` を付与する。失敗時には `ai-processing` を外して再試行できるようにする。
+
 ```yaml
 name: Issue Auto Improve
 
@@ -85,72 +86,50 @@ on:
 
 jobs:
   improve-issue:
-    runs-on: ubuntu-latest           # 標準ランナー (2コア7GB)
-    timeout-minutes: 2               # API呼び出し中心の処理で15-20秒程度
-    # 注: ubuntu-slim (1コア5GB) でも十分実行可能
-    
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    if: |
+      !contains(github.event.issue.labels.*.name, 'ai-processing') &&
+      !contains(github.event.issue.labels.*.name, 'ai-processed')
     steps:
-      - name: Check if issue needs improvement
-        id: check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issue = context.payload.issue;
-            const body = issue.body || '';
-            
-            // 短い記述（200文字以内）のみ処理
-            if (body.length > 200) {
-              core.setOutput('needs_improvement', 'false');
-              return;
-            }
-            
-            // 既にテンプレートに沿っている場合はスキップ
-            if (body.includes('## 背景・目的') || body.includes('## 完了条件')) {
-              core.setOutput('needs_improvement', 'false');
-              return;
-            }
-            
-            core.setOutput('needs_improvement', 'true');
-      
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
-      
-      - name: Generate improved content and post comment
-        if: steps.check.outputs.needs_improvement == 'true'
-        id: generate
-        run: |
-          # uvx で PEP-723対応スクリプトを実行
-          # スクリプト内でGitHub CLI (gh)経由でコメント投稿
-          uvx .github/scripts/improve_issue.py
+      - name: Add processing label
+        run: gh issue edit ${{ github.event.issue.number }} --add-label "ai-processing"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Improve issue content
+        id: improve
+        run: uv run .github/scripts/improve_issue.py
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-      
-      - name: Handle errors
+      - name: Mark as processed
+        if: success()
+        run: gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing" --add-label "ai-processed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Remove processing label on failure
         if: failure()
-        run: |
-          gh issue comment ${{ github.event.issue.number }} \
-            --body '⚠️ Issue自動改善機能でエラーが発生しました。手動でIssue内容を記入してください。'
+        run: gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-**検証項目:**
-- [ ] Workflowが正常に起動するか
-- [ ] Issue本文の取得が正常に動作するか
-- [ ] 環境変数（Secrets）の受け渡しが動作するか
-- [ ] LLM API呼び出しが成功するか
-- [ ] GitHub CLI (gh)経由のコメント投稿が成功するか
-- [ ] 実行時間が2分以内か（実際は15-20秒程度を想定）
-- [ ] エラー時のハンドリングが適切か
-- [ ] --dry-runモードでローカル検証が可能か
-- [ ] リソース消費（CPU/メモリ）が想定範囲内か
+#### 検証ポイント
+
+- ラベル gating (`ai-processing` / `ai-processed`) が正しく動作するか
+- `uv run .github/scripts/improve_issue.py` により例文が生成され、コメントが投稿されるか
+- 失敗時には `ai-processing` を除去して再実行可能になるか
+
 
 **想定課題と対策:**
 | 課題 | 対策 |
@@ -164,44 +143,26 @@ jobs:
 
 #### 検証内容
 
-**判定プロンプト例:**
-```
-以下のIssue記述から、最も適切なテンプレートを1つ選択してください。
+テンプレート判定は厳密な LLM 判定ではなく、キーワードベースで `feature_request` / `bug_report` を選定します。具体的には、タイトル/本文の小文字化された文字列に対して以下のキーワードの出現回数をスコアとして集計し、最大スコアのテンプレートを採用（0点の場合は `feature_request` をデフォルト）。
 
-【Issue記述】
-{issue_body}
+**キーワード例:**
+- `feature_request`: 機能, 追加, 変更, 改善, したい, 欲しい, 必要
+- `bug_report`: バグ, エラー, 不具合, 動かない, 失敗, 問題
 
-【選択肢】
-1. feature-1: 機能要件（新機能の追加、既存機能の変更）
-2. feature-2-design: 機能設計（実装方針、技術選定、アーキテクチャ）
-3. bug_report: バグ報告（不具合、エラー、想定外の動作）
-4. feature-3-coding: 実装（コーディング、テスト実装）
-
-【出力形式】
-選択したテンプレート名のみを出力してください（例: feature-1）
-```
-
-**テストケース:**
-| Issue記述 | 期待テンプレート |
-|-----------|------------------|
-| 「想定運転データの一括登録機能を追加したい」 | feature-1 |
-| 「一括登録のデータベース設計を検討したい」 | feature-2-design |
-| 「CSVアップロード時にエラーが発生する」 | bug_report |
-| 「OpePlan.save()メソッドの実装」 | feature-3-coding |
+**検証手順:**
+1. テスト用 Issue を用意し、タイトルと本文に一致するキーワードを含める
+2. `TemplateDetector.detect()` を実行し、期待されるテンプレート名が返るか確認
+3. キーワードがないケースでは `feature_request` にフォールバックすることを確認
 
 **評価指標:**
-- 判定精度（10件のテストケースで評価）
-- 判定時間
-
-**想定結果:**
-- 判定精度: 80-90%
-- 判定時間: 2-5秒
+- 判定精度（10件程度のテストケースで実測）
+- 判定に要する時間（関数実行 + ファイル読み込み）
 
 #### 誤判定時の対策
 
-- システムプロンプトで判定基準を明確化
-- Few-shot例を追加（各テンプレート2-3例）
-- ユーザーが手動で修正可能なコメント形式
+- `KEYWORDS` の調整（重要キーワードの追加/削除）
+- タイトル/本文の正規化（全角→半角など）
+- 不明な場合は `feature_request` にフォールバックし、生成コンテンツで差分を補完
 
 ### 4. コスト試算
 
@@ -272,97 +233,12 @@ PEP-723を使用し、スクリプト内で依存関係を宣言：
 # ///
 ```
 
-**実装例（improve_issue.py）:**
-```python
-# /// script
-# dependencies = [
-#   "google-generativeai>=0.8.3",
-# ]
-# ///
-import argparse
-import os
-import sys
-import subprocess
-import tempfile
-from llm_client import LLMClient
-from template_detector import TemplateDetector
-from prompt_templates import IMPROVE_PROMPT_TEMPLATE
-
-def main():
-    # 引数解析
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dry-run', action='store_true',
-                        help='ローカル検証用（コメント投稿スキップ）')
-    args = parser.parse_args()
-    
-    issue_body = os.environ.get('ISSUE_BODY', '')
-    issue_title = os.environ.get('ISSUE_TITLE', '')
-    issue_number = os.environ.get('ISSUE_NUMBER', '')
-    
-    print(f"Processing issue #{issue_number}")
-    
-    # テンプレート判定
-    detector = TemplateDetector()
-    template_name = detector.detect(issue_body, issue_title)
-    print(f"Detected template: {template_name}")
-    
-    # 例文生成
-    client = LLMClient(api_key=os.environ['LLM_API_KEY'])
-    prompt = IMPROVE_PROMPT_TEMPLATE.format(
-        issue_body=issue_body,
-        issue_title=issue_title,
-        template_name=template_name
-    )
-    improved_content = client.generate(prompt)
-    print("Content generated successfully")
-    
-    # 出力内容作成
-    output = f"""## 🤖 AIによるIssue記入例
-
-**選定テンプレート**: {template_name}
-
----
-
-{improved_content}
-
----
-
-💡 **使い方**: 上記の例文を参考に、Issue本文を編集してください。
-"""
-    
-    # --dry-run モードではコンソール出力のみ
-    if args.dry_run:
-        print("[DRY RUN] コメント投稿をスキップ")
-        print("\n" + "="*60)
-        print(output)
-        print("="*60)
-        return
-    
-    # 通常モード: GitHub CLIでコメント投稿
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', 
-                                      suffix='.md', delete=False) as f:
-        f.write(output)
-        temp_file = f.name
-    
-    try:
-        subprocess.run(
-            ['gh', 'issue', 'comment', issue_number, '--body-file', temp_file],
-            capture_output=True, text=True, check=True
-        )
-        print(f"Comment posted successfully to issue #{issue_number}")
-    finally:
-        os.unlink(temp_file)
-
-if __name__ == '__main__':
-    main()
-```
-
 **ローカル検証方法:**
 
 ```bash
 # 環境変数設定
-export ISSUE_BODY="想定運転データを一括登録したい"
-export ISSUE_TITLE="想定運転データCSV一括登録機能"
+export ISSUE_TITLE="Mermaid図の拡大縮小機能"
+export ISSUE_BODY="ページ編集 でMermaid図の部分だけ別ウインドウで表示して拡大縮小したい。ページ全体の編集ではプレビューの縦位置がずれてしまうため使いづらい"
 export ISSUE_NUMBER="123"
 export LLM_API_KEY="your-api-key"
 
@@ -370,84 +246,6 @@ export LLM_API_KEY="your-api-key"
 uvx .github/scripts/improve_issue.py --dry-run
 ```
 
-## 検証スケジュール
-
-### Week 1: 環境構築・基本動作確認
-
-- [ ] ローカル環境で--dry-runモードで動作確認
-- [ ] LLM API（Gemini）の接続確認
-- [ ] GitHub Actions Workflowの基本構造作成
-- [ ] GitHub CLI (gh)経由のコメント投稿確認
-- [ ] Issue作成→コメント投稿の動作確認
-
-### Week 2: 品質評価・改善
-
-- [ ] 10件のテストケースで例文生成
-- [ ] テンプレート判定精度の測定
-- [ ] プロンプト改善（必要に応じて）
-- [ ] コスト・実行時間の実測
-
-### Week 3: エラーハンドリング・最適化
-
-- [ ] API障害時のエラーハンドリング
-- [ ] 重複投稿防止ロジック
-- [ ] ドキュメント作成
-
-## 成功基準
-
-### 必須条件
-
-- [ ] GitHub Actions Workflowが正常動作
-- [ ] LLM APIからの例文生成が成功
-- [ ] Issueへのコメント投稿が成功
-- [ ] 実行時間が2分以内（実測15-20秒を想定）
-- [ ] テンプレート判定精度が70%以上
-- [ ] GitHub Actionsリソース消費が想定内（CPU平均10%、メモリピーク180MB以下）
-
-### 推奨条件
-
-- [ ] 生成例文がテンプレート項目を80%以上網羅
-- [ ] 月間コストが100円以内
-- [ ] エラー時のリトライが機能
-
-## リスク・課題
-
-### 技術的リスク
-
-| リスク | 発生確率 | 影響度 | 対策 |
-|--------|---------|--------|------|
-| LLM API障害 | 中 | 高 | エラーハンドリング、フォールバック |
-| 生成品質低下 | 中 | 中 | プロンプト改善、モデル変更 |
-| 実行時間超過 | 低 | 中 | タイムアウト設定、軽量化 |
-| GitHub Actions障害 | 低 | 高 | 手動実行オプション |
-
-### 運用リスク
-
-| リスク | 発生確率 | 影響度 | 対策 |
-|--------|---------|--------|------|
-| コスト超過 | 低 | 低 | 月次モニタリング、上限設定 |
-| 誤判定・不適切な例文 | 中 | 低 | ユーザーが手動修正可能 |
-| Secrets漏洩 | 低 | 高 | GitHub Secrets使用、ログ出力制限 |
-
-## 次のステップ
-
-検証完了後、以下の判断を行う：
-
-### Go判断基準
-
-- 必須条件をすべて満たす
-- 月間コストが予算内（100円以内）
-- 生成例文の品質が実用レベル
-
-→ **Phase 1（基本機能実装）へ進む**
-
-### No Go判断基準
-
-- 必須条件を満たせない項目がある
-- コストが予算を大幅に超過
-- 生成例文の品質が低すぎる
-
-→ **代替案検討（手動トリガー、簡易チェックのみ等）**
 
 ## 参考情報
 

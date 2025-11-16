@@ -70,15 +70,14 @@
 
 1. ユーザーがブランクIssueを作成し、やりたいことを1-2行で記述
    ```
-   例: 「想定運転データの一括登録機能を追加したい」
+   例: 「Mermaid図の拡大縮小機能を追加したい」
    ```
 
 2. GitHub Actions Workflowが自動起動
 
 3. 簡易記述から適切なテンプレートを判定
-   - 要件Issue（feature-1）
-   - 設計Issue（feature-2-design）
-   - その他
+   - 機能要件Issue（feature_request）
+   - バグ報告（bug_report）
 
 4. RAGで類似Issue情報を検索・取得
 
@@ -109,54 +108,22 @@
 
 ## 完了条件（Acceptance Criteria）
 
-### 機能的な完了条件
+### Phase 1（実装済み）
 
-- [ ] ブランクIssue作成時にGitHub Actions Workflowが自動起動される
-- [ ] Issue本文（1-2行の簡易記述）から適切なテンプレートを自動判定できる
-  - 要件Issue、設計Issue、バグ報告、実装Issueの4種類を判定
-- [ ] 過去の類似Issueを検索し、Top-3〜5件を取得できる
-- [ ] 判定したテンプレートに沿った具体的な例文が生成される
-  - テンプレートの主要項目（背景・目的、完了条件、影響範囲等）を網羅
-- [ ] 生成された例文がIssueコメントとして自動投稿される
-- [ ] コメントには選定したテンプレートと参考にした類似Issueの情報が含まれる
-  - 類似度スコア
-  - Issue番号とタイトル
-  - Issue URL
-  - 類似している点の説明
-- [ ] 参考にした類似IssueがIssue本文の「関連Issue」欄に自動リンクされる
+- ✅ Issue作成時にGitHub Actions Workflowが自動起動する（`on: issues.types: [opened]`）
+- ✅ `ai-processing` / `ai-processed` ラベルで状態を管理し、重複Commentと多重実行を防止
+- ✅ キーワードベースで `feature_request` / `bug_report` のテンプレートを選定
+- ✅ `.github/ISSUE_TEMPLATE` に沿ったプロンプトを組み立てて、Gemini API (`gemini-2.5-flash`) から例文を生成
+- ✅ `gh issue comment` でフォーマット済みコメントを投稿し、`ai-processed` を付与
+- ✅ `uv run .github/scripts/improve_issue.py --dry-run` でローカル検証が行える
 
-### 品質的な完了条件
+### Phase 2 以降（未実装・将来対応）
 
-- [ ] テンプレート判定精度が80%以上（手動評価10件）
-  - 人間が判断するテンプレートと一致
-- [ ] 生成された例文がテンプレートの必須項目を90%以上網羅している
-- [ ] 類似Issue検索の適合率が60%以上
-  - Top-3のうち少なくとも2件は実際に関連している内容
-- [ ] 生成された例文が具体的で実用的である
-  - 抽象的・汎用的すぎる文章ではない
-  - ユーザーが微修正で使える品質
-
-### 非機能的な完了条件
-
-- [ ] GitHub Actions Workflow実行時間が5分以内
-- [ ] API呼び出し失敗時も正常終了し、エラーメッセージを投稿
-- [ ] 既に詳細が記述されているIssueには反応しない（誤動作防止）
-- [ ] 特定ラベル（`no-ai-assist`等）がついたIssueは処理をスキップ
-- [ ] 同じIssueに対して重複してコメントを投稿しない
-
-### ユーザー体験の完了条件
-
-- [ ] ユーザーが生成された例文を見て、何を修正すればいいか理解できる
-- [ ] 例文を元に5分以内で実情に合わせた修正ができる
-- [ ] Issue作成の心理的ハードルが下がったとユーザーが感じる（アンケート実施）
-
-### 開発・検証の完了条件
-
-- [ ] ローカル環境で `--dry-run` で動作検証できる
-- [ ] コンソール出力のみモードで生成結果を確認できる
-- [ ] `--index-issues` で既存Issue全件のベクトル化ができる（Phase 2）
-- [ ] `--index-issues --start N --end N` で範囲指定処理ができる（Phase 2）
-- [ ] インデックス処理時のエラーハンドリングが適切（1件失敗しても継続）
+- [ ] RAG で類似Issueを取得し、Top-Kをプロンプトに含める
+- [ ] 類似Issueのメタ情報（スコア・番号・URL）をコメントで明示
+- [ ] Issue本文更新時の再生成・コメント更新を自動化
+- [ ] Qdrant Cloud 等のベクトルDBに Issue をインデックス登録
+- [ ] `--index-issues` / Embedding API による RAG インジェスト機能
 
 ## 機能仕様
 
@@ -166,215 +133,92 @@
 - ブランクIssue、または短い記述（1-2行程度）のIssue
 
 **判定先テンプレート:**
-- 要件Issue（feature-1テンプレート）
-- 設計Issue（feature-2-designテンプレート）
-- バグ報告（bug_reportテンプレート）
-- 実装Issue（feature-3-codingテンプレート）
+- 機能要件Issue（`.github/ISSUE_TEMPLATE/feature_request.md`）
+- バグ報告（`.github/ISSUE_TEMPLATE/bug_report.md`）
 
 **判定方法:**
-- Issue本文の内容からLLMで判定
-- キーワード・文脈からどのテンプレートが適切か推定
+- `feature_request` / `bug_report` それぞれのキーワードリスト（`機能`, `バグ`, `改善` など）と本文・タイトルを照合
+- 最もスコアが高いテンプレートを選択し、スコアがゼロの場合は `feature_request` をデフォルト
+- 判定結果をもとにテンプレートファイルの本文を読み込み、LLMプロンプトを構築
 
 **非対象:**
-- すでに十分に記述されているIssue（テンプレートに沿って詳細が書かれている）
+- 特定のラベルが設定されたissue
 
 ### 参考情報の範囲
 
-**含める情報:**
-- 過去の類似Issueの本文
-- 過去の類似Issueのコメント（完了に必要な議論内容を含む）
-- 将来的に追加: プロジェクトドキュメント（`.dev/`配下等）
+**含める情報（Phase 1）:**
+- 作成直後の Issue タイトル・本文（1-2行程度の簡易記述）
+- テンプレートファイル（`.github/ISSUE_TEMPLATE/*.md`）の構造
 
 **含めない情報:**
-- Pull Request（実装寄りのため）
+- 過去Issueのテキストやコメント（Phase 2 でのRAG対応で追加予定）
+- Pull Request（実装済み/実装中のため）
 
 ### ブラッシュアップの観点
 
 1. **テンプレート準拠性**: 対応するテンプレートの項目が埋まっているか
-2. **情報の網羅性**: 過去の類似Issueで必要とされた情報が含まれているか
-3. **具体性**: 抽象的な記述を具体的な記述に改善
-4. **関連情報の補完**: 依存関係、参考資料、前提知識の提示
+2. **情報の網羅性**: 必要な項目（背景・目的、完了条件等）が漏れていないか
+3. **具体性**: 抽象的な記述を具体的で再現性のある表現に改善
+4. **関連情報の補完**: 依存関係・参考資料・前提知識が示されているか
 
-### 出力形式
+### 出力形式（Phase 1）
 
 **コメント投稿:**
-- 対象IssueにGitHub Actions Botアカウントでコメント投稿
-- Markdown形式
-- ブラッシュアップされた内容 + 改善提案の根拠を明示
+- GitHub Actions Bot が `gh issue comment` で対象IssueにMarkdownコメントを投稿
+- コメント末尾に `<!-- AI-generated comment -->` を残し、Botによる生成物であることを明示
 
 **コメント構成例:**
 ```markdown
 ## 🤖 AIによるIssue記入例
 
-**選定テンプレート**: 機能要件（親Issue）
-
-### 背景・目的
-（生成された具体的な文章）
-
-### 完了条件
-- [ ] ...
-
-### 影響範囲
-（生成された内容）
+**選定テンプレート**: 機能要件（feature_request）
 
 ---
 
-### 📚 参考にした類似Issue
+（LLMが生成したテンプレート準拠の具体例）
 
-この例文は以下の過去Issueを参考に生成しています：
+---
 
-1. **#123: 想定運転データCSV一括登録機能** (closed)
-   - 類似度: 85%
-   - https://github.com/owner/repo/issues/123
-   - 類似点: データ一括登録の要件定義、CSVフォーマット設計
+💡 **使い方**: 上記の例文を参考にIssue本文を更新してください。実情に合わせて適宜修正してください。
 
-2. **#156: 運転計画データインポート機能追加** (closed)
-   - 類似度: 72%
-   - https://github.com/owner/repo/issues/156
-   - 類似点: バリデーション要件、エラーハンドリング
-
-3. **#201: 生産計画データ登録API実装** (open)
-   - 類似度: 68%
-   - https://github.com/owner/repo/issues/201
-   - 類似点: データ登録フロー、テスト観点
+<!-- AI-generated comment -->
 ```
 
-**Issue本文への参考情報追加:**
-- 生成後、Issue本文の「関連Issue」セクションに類似Issueのリンクを自動追加
-- または、Issueのサイドバーに「Related Issues」として自動リンク（GitHub APIの制約により検討）
-
-## 技術要件
-
-### LLM選定（2025年11月時点）
-
-**Phase別推奨モデル:**
-
-| Phase | 推奨モデル | 理由 | 月額コスト目安 |
-|-------|----------|------|-------------|
-| Phase 0 | Gemini 2.0 Flash-Lite | 検証用、極低コスト | 約1円 |
-| Phase 1-2 | Gemini 2.5 Flash | コスパ良好、ハイブリッド推論 | 約9円 |
-| Phase 2 | Claude 3.7 Sonnet | 最高品質、推論強化 | 約54円 |
-
-**主要モデル比較（入力/出力、100万トークンあたり）:**
-
-| モデル | 入力 | 出力 | 特徴 |
-|--------|------|------|------|
-| Gemini 2.0 Flash-Lite | $0.075 | $0.30 | 超低コスト |
-| Gemini 2.5 Flash | $0.30 | $2.50 | コスパ良好、日本語強い |
-| GPT-4o-mini | $0.15 | $0.60 | バランス型 |
-| Claude 3.7 Sonnet | $3.00 | $15.00 | 最高品質、拡張思考対応 |
-
-**参考: 2025年10月 Nejumi Leaderboard 日本語LLMランキング**
-- Gemini 2.5 Pro: 1位（コーディング性能 0.6449）
-- Claude 3.7 Sonnet: 8位（0.5940）
-- Gemini 2.5 Flash: 30位（0.5004）
-
-### アーキテクチャ概要
+### アーキテクチャ概要（Phase 1）
 
 ```
 [GitHub Issue作成]
-    ↓
-[GitHub Actions Workflow起動]
-    ↓
-[対象Issue内容取得]
-    ↓
-[ベクトル検索で類似Issue取得] ← [Qdrant Cloud]
-    ↓
-[LLMでブラッシュアップ案生成]
-    ↓
-[Issueにコメント投稿 or コンソール出力]  ← 環境変数で切替
+      ↓
+[Workflow起動]  # `issue` イベント（opened）
+      ↓
+[TemplateDetector]  # キーワード判定＋テンプレート読み込み
+      ↓
+[LLM (Gemini 2.5 Flash) で例文生成]
+      ↓
+[コメント投稿（gh） + ラベル更新（ai-processing → ai-processed）]
 ```
 
-### ローカル開発・検証モード
+### ローカル検証モード
 
-スクリプトは実行モードを引数で切り替える：
+- `uv run .github/scripts/improve_issue.py --dry-run` で依存関係を自動インストールしつつ、コメント投稿をスキップして出力のみ表示
+- 環境変数には `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_NUMBER`, `LLM_API_KEY`, `GITHUB_TOKEN`（コメントなしでも取得のために必要）を設定
 
-```bash
-# モード1: 単一Issue改善（デフォルト）
-uvx .github/scripts/improve_issue.py [--dry-run]
+### RAG（Phase 2 以降の予定）
 
-# モード2: RAGデータ生成
-uvx .github/scripts/improve_issue.py --index-issues [--start N] [--end N]
-```
+RAG検索・ベクトルDB連携はPhase 2で実装予定。現行では `--index-issues` の処理は含まれていませんが、今後以下のような機能を追加する計画です。
 
-#### モード1: 単一Issue改善モード
+**主な構成:**
+1. 全Issueまたは指定範囲を対象にIssue本文/タイトルを結合
+2. Embedding APIでベクトルを生成
+3. Qdrant等のベクトルDBへ登録（メタデータ付き）
+4. メンテナンス用の進捗ログとエラーハンドリング
 
-**通常実行（本番・GitHub Actions）:**
-```bash
-export ISSUE_NUMBER="123"
-export GITHUB_TOKEN="your-github-token"
-export GITHUB_REPOSITORY="owner/repo"
-export LLM_API_KEY="your-api-key"
-
-uvx .github/scripts/improve_issue.py
-# → Issue #123 を改善してコメント投稿
-```
-
-**検証実行（ローカル開発）:**
-```bash
-export ISSUE_NUMBER="123"
-export GITHUB_TOKEN="your-github-token"
-export GITHUB_REPOSITORY="owner/repo"
-export LLM_API_KEY="your-api-key"
-
-uvx .github/scripts/improve_issue.py --dry-run
-# → 実際のIssue #123 からデータを取得
-# → RAG検索で類似Issueも取得（Phase 2以降）
-# → LLMで生成
-# → コンソールに出力のみ（コメント投稿なし）
-```
-
-**動作詳細:**
-- GitHub APIでIssue情報を取得（読取り）
-- RAG検索で類似Issueを取得（Phase 2以降）
-- LLM APIで例文生成
-- `--dry-run` 指定時: **コメント投稿のみスキップ**、結果を標準出力
-
-#### モード2: RAGデータ生成モード（Phase 2以降）
-
-既存の全Issue（または指定範囲）をベクトル化してQdrantに登録：
-
-**全Issue登録:**
-```bash
-export GITHUB_TOKEN="your-github-token"
-export GITHUB_REPOSITORY="owner/repo"
-export QDRANT_URL="https://your-cluster.qdrant.io"
-export QDRANT_API_KEY="your-qdrant-key"
-export EMBEDDING_API_KEY="your-embedding-key"
-
-uvx .github/scripts/improve_issue.py --index-issues
-# → 全Issueを取得してベクトル化
-# → Qdrantに登録
-```
-
-**範囲指定登録:**
-```bash
-uvx .github/scripts/improve_issue.py --index-issues --start 1 --end 100
-# → Issue #1〜#100 を処理
-```
-
-**動作詳細:**
-1. GitHub API経由で既存Issueを取得（読取り）
-2. 全Issue（または指定範囲）を対象
-3. 各Issueに対して：
-   - Issue本文 + タイトルを結合
-   - Embedding APIでベクトル化
-   - Qdrantに登録（メタデータ含む）
-4. 進捗を標準出力に表示
-5. エラー発生時も継続処理（ログ出力）
-
-**メタデータ:**
-- `issue_number`: Issue番号
-- `issue_title`: タイトル
-- `issue_body`: 本文（先頭500文字）
-- `template_type`: テンプレート種別（推定）
-- `state`: open/closed
-- `created_at`: 作成日時
-- `url`: Issue URL
+**メタデータ例:**
+- `issue_number`, `issue_title`, `issue_body`（先頭500文字）、`template_type`, `state`, `created_at`, `url`
 
 **用途:**
 - RAG検索用ベクトルDBの初期構築
-- 新規Issueが作成された際の自動インデックス更新（Phase 2で自動化）
+- 新規Issue作成時の情報追加（Phase 2で自動化予定）
 - 定期的な全体再インデックス
 
 **実行タイミング:**
@@ -382,48 +226,25 @@ uvx .github/scripts/improve_issue.py --index-issues --start 1 --end 100
 - 大量Issue作成後の一括インデックス
 - インデックス再構築が必要な場合
 
-#### モード比較
+#### モード比較（予定）
 
 | 項目 | モード1: 単一Issue改善 | モード2: RAGデータ生成 |
 |------|----------------------|----------------------|
-| **実行** | `uvx improve_issue.py [--dry-run]` | `uvx improve_issue.py --index-issues` |
+| **実行** | `uvx .github/scripts/improve_issue.py [--dry-run]` | `uvx .github/scripts/improve_issue.py --index-issues` |
 | **対象** | 単一Issue（ISSUE_NUMBER指定） | 全Issue or 範囲指定 |
 | **GitHub API** | Issue取得（読取り） | Issue取得（読取り） |
-| **RAG検索** | 類似Issue検索（Phase 2） | - |
-| **LLM API** | 例文生成 | - |
-| **Embedding API** | - | ベクトル化 |
-| **Qdrant** | 検索（読取り） | 登録（書込み） |
-| **コメント投稿** | あり（--dry-runでスキップ） | なし |
+| **RAG検索** | なし（Phase 1） | 類似Issue検索（予定） |
+| **LLM API** | 例文生成 | なし |
+| **Embedding API** | なし | ベクトル化 |
+| **Qdrant** | なし | 登録（書込み） |
+| **コメント投稿** | あり（`--dry-run`でスキップ） | なし |
 | **出力** | コメント or コンソール | 進捗ログ |
 
-### RAG（Retrieval-Augmented Generation）実装
-
-#### ベクトルデータベース
-
-- **採用候補**: Qdrant Cloud
-- **理由**: 
-  - マネージドサービスで運用負荷が低い
-  - 無料枠での利用可能性
-  - REST APIでアクセス可能
-
-#### Text Embedding
-
-- **必要処理**:
-  - テキストの分割（チャンキング）
-  - Embeddingベクトル生成
-  - Qdrantへの登録
-  
-- **検討事項**:
-  - Embedding生成サービスの選定（OpenAI, Cohere, Voyage AI, OSS等）
-  - コスト・レイテンシのバランス
-  - 日本語対応の品質
-
-#### データ構造設計
+#### データ構造設計（Phase 2予定）
 
 **Issueデータの扱い:**
-- Issue本文を主要なドキュメントとして扱う
-- Issueコメントは従属情報として本文と関連付け
-- メタデータ: Issue番号、作成日、ラベル、状態（open/closed）
+- Issue本文を主要なドキュメントとして扱い、コメントは従属情報として紐付け
+- メタデータ: Issue番号・作成日・ラベル・状態（open/closed）など
 
 **インデックス更新タイミング:**
 - Issue作成時
@@ -432,33 +253,65 @@ uvx .github/scripts/improve_issue.py --index-issues --start 1 --end 100
 
 ### GitHub Actions Workflow
 
-#### 実行環境
+#### トリガー・条件
 
-- **ランナー**: `ubuntu-slim` を検討（コスト削減）
-- **条件**:
-  - CPUコア数・メモリ使用量が少ない場合
-  - 外部APIとの通信が主体の場合
+- `issues` イベントの `opened` のみを対象に起動
+- `jobs.improve-issue.if` で `ai-processing` / `ai-processed` ラベルをチェックし、既に処理済みのIssueはスキップ
+- `runs-on: ubuntu-slim`、`timeout-minutes: 2` で短時間のAPI中心処理に対応
 
-#### 実行時間の制約
-
-- GitHub Actionsは従量課金のため実行時間を最小化
-- タイムアウト設定: 5分以内を目標
-- 重い処理は外部サービスに委譲
-
-#### トリガー条件
+#### 処理フロー（実装バージョン）
 
 ```yaml
+name: Issue Auto Improve (Phase 1)
+
 on:
-  issues:
-    types: [opened, edited]
+   issues:
+      types: [opened]
+
+jobs:
+   improve-issue:
+      runs-on: ubuntu-slim
+      timeout-minutes: 2
+      if: |
+         !contains(github.event.issue.labels.*.name, 'ai-processing') &&
+         !contains(github.event.issue.labels.*.name, 'ai-processed')
+      steps:
+         - name: Checkout repository
+            uses: actions/checkout@v4
+         - name: Install uv
+            uses: astral-sh/setup-uv@v5
+            with:
+               version: "latest"
+         - name: Add processing label
+            run: gh issue edit ${{ github.event.issue.number }} --add-label "ai-processing"
+            env:
+               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+         - name: Improve issue content
+            id: improve
+            run: uv run .github/scripts/improve_issue.py
+            env:
+               ISSUE_BODY: ${{ github.event.issue.body }}
+               ISSUE_TITLE: ${{ github.event.issue.title }}
+               ISSUE_NUMBER: ${{ github.event.issue.number }}
+               LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+               GITHUB_REPOSITORY: ${{ github.repository }}
+         - name: Mark as processed
+            if: success()
+            run: gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing" --add-label "ai-processed"
+            env:
+               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+         - name: Remove processing label on failure
+            if: failure()
+            run: gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing"
+            env:
+               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-#### 処理フロー
+#### ラベルとエラーハンドリング
 
-1. Issue内容の解析（テンプレート判定）
-2. Qdrantから類似Issue取得（Top-K件）
-3. LLM APIでブラッシュアップ案生成
-4. GitHub APIでコメント投稿（or 既存コメント更新）
+- `ai-processing` で処理中ステータスを示し、完了時に `ai-processed` を付与して二重実行を防止
+- 失敗時には専用ステップで `ai-processing` をはずし、再実行できる状態にする
 
 ### セキュリティ・認証
 
@@ -493,11 +346,11 @@ on:
 **目的**: RAGなしで基本フローの動作確認、技術選定の妥当性検証
 
 **実装内容:**
-- [ ] GitHub Actions Workflowの基本構造構築
-- [ ] Issue作成イベントのトリガー設定
-- [ ] LLM APIとの接続確認（OpenAI/Anthropic等の選定）
-- [ ] 固定プロンプトでの例文生成テスト
-- [ ] Issueコメント投稿の実装
+- [x] GitHub Actions Workflowの基本構造構築
+- [x] Issue作成イベントのトリガー設定
+- [x] LLM APIとの接続確認（Gemini 2.5 Flash を中心に）
+- [x] 固定プロンプトでの例文生成テスト
+- [x] Issueコメント投稿の実装
 
 **検証ポイント:**
 - GitHub Actions環境でのLLM API呼び出しが正常動作するか
@@ -505,7 +358,7 @@ on:
 - 生成される例文の品質が使えるレベルか
 
 **完了条件:**
-- [ ] ブランクIssueに「機能追加したい」と書くと、何らかの例文がコメントされる
+- ✅ ブランクIssueに「機能追加したい」と書くと、例文がコメントされる（Phase 0 で確認済み）
 
 **期待工数**: 2-3日
 
@@ -513,24 +366,23 @@ on:
 
 ### Phase 1（基本機能実装）
 
-**目的**: テンプレート判定と汎用的な例文生成で最小限の価値提供
+**目的**: テンプレート判定と汎用的な例文生成でIssue記述支援を行う
 
 **実装内容:**
-- [ ] Issue本文からのテンプレート自動判定機能
-  - 要件Issue（feature-1）のみ対応
-- [ ] テンプレート構造を理解したプロンプト設計
-- [ ] テンプレートに沿った例文生成
-- [ ] エラーハンドリングの実装
-- [ ] 既存Issue（詳細記述済み）の除外ロジック
+- [x] Issue本文/タイトルからのテンプレート自動判定（feature_request / bug_report）
+- [x] テンプレート構造を読み取ってプロンプトを構築
+- [x] Gemini 2.5 Flash でテンプレート準拠の例文を生成
+- [x] `gh issue comment` + `ai-processing` / `ai-processed` ラベル管理を組み合わせたコメント投稿
+- [x] `--dry-run` モードでコメント投稿をスキップするローカル検証
 
 **検証ポイント:**
-- テンプレート判定精度は実用的か
-- 生成された例文はテンプレート項目を網羅しているか
-- ユーザーが微修正で使えるか
+- テンプレート判定ロジックが安定して `feature_request` / `bug_report` を返すか
+- 生成された例文にテンプレートの主要項目が含まれているか
+- コメント投稿とラベル遷移（`ai-processing`→`ai-processed`）が正しく動作するか
 
 **完了条件:**
-- [ ] 簡易記述のIssueに対して、feature-1テンプレートに沿った例文が生成される
-- [ ] テンプレート判定精度70%以上（手動評価10件）
+- ✅ 1-2行のIssueに対して、テンプレート準拠のコメントが投稿される
+- ✅ `ai-processing` で処理中を示し、成功時に `ai-processed` を付与
 
 **期待工数**: 3-5日
 
@@ -567,18 +419,16 @@ on:
 **目的**: 要件以外のIssueタイプにも対応し、適用範囲を拡大
 
 **実装内容:**
-- [ ] 設計Issue（feature-2-design）テンプレート対応
 - [ ] バグ報告（bug_report）テンプレート対応
-- [ ] 実装Issue（feature-3-coding）テンプレート対応
 - [ ] 各テンプレート用のプロンプト最適化
 - [ ] テンプレート判定精度の向上
 
 **検証ポイント:**
-- 4種類のテンプレートを正しく判別できるか
+- 2種類のテンプレートを正しく判別できるか
 - 各テンプレートで適切な例文が生成されるか
 
 **完了条件:**
-- [ ] 4種類すべてのテンプレートに対応
+- [ ] 2種類すべてのテンプレートに対応
 - [ ] テンプレート判定精度80%以上
 
 **期待工数**: 3-5日
@@ -671,8 +521,8 @@ on:
 
 ## 関連ドキュメント
 
-- GitHub Issue Template: `.github/ISSUE_TEMPLATE/feature-1.md`（要件）
-- GitHub Issue Template: `.github/ISSUE_TEMPLATE/feature-2-design.md`（設計）
+- GitHub Issue Template: `.github/ISSUE_TEMPLATE/feature_request.md`（要件）
+- GitHub Issue Template: `.github/ISSUE_TEMPLATE/bug_report.md`（バグ報告）
 - Qdrant Documentation: https://qdrant.tech/documentation/
 - GitHub Actions Documentation: https://docs.github.com/actions
 
