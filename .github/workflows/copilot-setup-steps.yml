@@ -1,0 +1,27 @@
+name: "Copilot Setup Steps"
+
+# 設定手順が変更された際に自動的に実行し、容易な検証を可能にし、
+# リポジトリの「Actions」タブ経由で手動テストを実行可能にする。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # ジョブ名はCopilot によって認識されるように、必ず `copilot-setup-steps` とする
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    # ステップで必要な最低限の権限に設定してください。
+    # Copilotには、その操作用に独自のトークンが割り当てられます。
+    permissions:
+      # リポジトリをセットアップ手順の一部としてクローンしたい場合（例：依存関係をインストールするため）、`contents: read` 権限が必要です。
+      # セットアップ手順でリポジトリをクローンしない場合、Copilot は手順が完了後に自動的にこれを行います。
+      contents: read
+
+    # 任意のステップを定義できます。これらのステップは、エージェントが開始される前に実行されます。
+    # コードをチェックアウトしない場合、Copilotが自動的にチェックアウトします。
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
