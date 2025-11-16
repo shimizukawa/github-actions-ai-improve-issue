@@ -51,22 +51,40 @@ Issue本文とタイトルから、以下のテンプレートを自動判定し
 | feature_request | 機能、追加、変更、改善、したい | 機能要件 |
 | bug_report | バグ、エラー、不具合、動かない | バグ報告 |
 
-## Phase 1の実装範囲
+## Phase 2の実装範囲
 
-現在はPhase 1が実装されています：
+現在はPhase 2が実装されています：
 
+### 基本機能（Phase 1）
 - ✅ Issue作成時の自動起動
 - ✅ テンプレート自動判定（キーワードベース）
 - ✅ LLMによる例文生成（Gemini 2.5 Flash）
 - ✅ Issueへのコメント投稿
 - ✅ エラーハンドリング
-- ❌ RAG機能（過去Issue参照）は未実装（Phase 2で実装予定）
+
+### RAG機能（Phase 2）
+- ✅ Voyage AI 3.5-lite Embedding生成
+- ✅ Qdrant Cloud連携
+- ✅ 類似Issue検索（Top-3）
+- ✅ 検索結果を含む例文生成
+- ✅ 参考Issue情報の表示
+- ✅ Issue作成時の自動インデックス登録
+- ✅ Issue更新時の自動インデックス更新
+- ✅ RAG環境変数未設定時のフォールバック（Phase 1モードで動作）
 
 ## 設定
 
 ### 必要なGitHub Secrets
 
+#### 必須（Phase 1機能）
 - `GEMINI_API_KEY`: Google Gemini APIキー
+
+#### オプション（Phase 2 RAG機能）
+以下のSecretsを設定すると、RAG機能が有効になります。未設定の場合はPhase 1モード（RAG未使用）で動作します。
+
+- `QDRANT_URL`: Qdrant CloudのURL
+- `QDRANT_API_KEY`: Qdrant APIキー
+- `VOYAGE_API_KEY`: Voyage AI APIキー
 
 ### ラベルによる制御
 
@@ -119,17 +137,52 @@ PEP-723に従い、スクリプト内で依存関係を定義：
 
 スクリプトは以下の実行モードをサポート：
 
-1. **通常モード**: GitHub Actionsから実行、コメント投稿
+1. **通常モード**: GitHub Actionsから実行、コメント投稿、RAG検索（環境変数設定時）
 2. **--dry-run**: ローカル検証用、コメント投稿スキップ
-3. **--index-issues**: RAGデータ生成（Phase 2で実装予定）
+3. **--index-issues**: 全Issue一括インデックス作成（初回セットアップ用）
+4. **--update-single-issue N**: 単一Issue更新（Issue番号Nを指定）
 
-## 今後の予定（Phase 2以降）
+### RAGインデックス管理
 
-- [ ] RAG機能追加（過去Issue参照）
-- [ ] Qdrant Cloud連携
-- [ ] 類似Issue検索
-- [ ] Issue更新時の再生成
-- [ ] フィードバック機構
+#### 初回セットアップ（全Issue一括インデックス）
+
+```bash
+# 環境変数設定
+export GITHUB_TOKEN="your-github-token"
+export GITHUB_REPOSITORY="owner/repo"
+export QDRANT_URL="https://xxx.qdrant.io"
+export QDRANT_API_KEY="your-qdrant-api-key"
+export VOYAGE_API_KEY="your-voyage-api-key"
+
+# 全Issueをインデックス
+uv run .github/scripts/improve_issue.py --index-issues
+
+# 範囲指定も可能
+uv run .github/scripts/improve_issue.py --index-issues --start 1 --end 100
+```
+
+#### 単一Issue更新
+
+```bash
+# Issue番号123を更新
+uv run .github/scripts/improve_issue.py --update-single-issue 123
+```
+
+#### 自動更新
+
+GitHub Actionsにより、以下のタイミングで自動的にインデックスが更新されます：
+
+- Issue作成時: 例文生成後に自動登録
+- Issue編集時: 自動更新
+- Issue状態変更時（closed/reopened）: 自動更新
+- コメント投稿時: 自動更新
+
+## 今後の予定（Phase 3以降）
+
+- [ ] Issue本文更新時の再生成機能
+- [ ] 生成コメントの更新（上書き）機能
+- [ ] フィードバック機構（リアクション検知）
+- [ ] プロンプトA/Bテスト基盤
 
 ## 関連ドキュメント
 

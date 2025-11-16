@@ -1,16 +1,19 @@
-name: Issue Auto Improve (Phase 1)
+name: Issue Auto Improve (Phase 2)
 
 on:
   issues:
-    types: [opened]
+    types: [opened, edited, closed, reopened]
+  issue_comment:
+    types: [created]
 
 jobs:
   improve-issue:
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 3
     
-    # スキップ条件: ai-processing, ai-processed ラベルがついている場合
+    # Issue作成時のみ実行（ai-processing, ai-processed ラベルがない場合）
     if: |
+      github.event.action == 'opened' &&
       !contains(github.event.issue.labels.*.name, 'ai-processing') &&
       !contains(github.event.issue.labels.*.name, 'ai-processed')
     
@@ -40,6 +43,10 @@ jobs:
           LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # RAG環境変数（設定されていない場合はRAG未使用モードで動作）
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       
       - name: Mark as processed
         if: success()
@@ -54,3 +61,34 @@ jobs:
           gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-index:
+    runs-on: ubuntu-slim
+    timeout-minutes: 1
+    
+    # Issue更新時またはコメント投稿時のみ実行
+    if: |
+      github.event.action == 'edited' ||
+      github.event.action == 'closed' ||
+      github.event.action == 'reopened' ||
+      github.event_name == 'issue_comment'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      
+      - name: Update Qdrant index
+        run: |
+          uv run .github/scripts/improve_issue.py --update-single-issue ${{ github.event.issue.number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        continue-on-error: true  # RAG未設定時もエラーとしない
