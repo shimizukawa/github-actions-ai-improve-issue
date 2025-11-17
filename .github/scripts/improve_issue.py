@@ -3,6 +3,7 @@
 #   "google-generativeai>=0.8.3",
 #   "voyageai>=0.2.3",
 #   "qdrant-client>=1.7.0",
+#   "langchain-text-splitters>=0.3.0",
 # ]
 # ///
 """Issue自動改善スクリプト - Phase 2実装
@@ -38,6 +39,7 @@ try:
     import voyageai
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, VectorParams, PointStruct
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     RAG_AVAILABLE = True
 except ImportError:
@@ -273,78 +275,120 @@ class QdrantSearchClient:
     def search_similar_issues(
         self, query_vector: List[float], limit: int = 3
     ) -> List[Dict[str, Any]]:
-        """類似Issue検索
+        """類似Issue検索（チャンク対応）
 
         Args:
             query_vector: クエリベクトル
-            limit: 取得件数（Top-K）
+            limit: 取得件数（Top-K）- Issue数（チャンク数ではない）
 
         Returns:
             類似Issue情報のリスト
         """
         try:
+            # より多くのチャンクを取得してIssueごとに集約
             results = self.client.search(
                 collection_name=self.COLLECTION_NAME,
                 query_vector=query_vector,
-                limit=limit,
+                limit=limit * 5,  # 余裕を持って取得
             )
 
-            similar_issues = []
+            # Issueごとに最高スコアのチャンクを集約
+            issue_map = {}
             for result in results:
-                similar_issues.append(
-                    {
-                        "issue_number": result.payload.get("issue_number"),
+                issue_num = result.payload.get("issue_number")
+                if (
+                    issue_num not in issue_map
+                    or result.score > issue_map[issue_num]["similarity"]
+                ):
+                    # チャンクまたは全文を取得
+                    issue_body = result.payload.get(
+                        "issue_body_chunk"
+                    ) or result.payload.get("issue_body", "")
+
+                    issue_map[issue_num] = {
+                        "issue_number": issue_num,
                         "issue_title": result.payload.get("issue_title", ""),
-                        "issue_body": result.payload.get("issue_body", "")[:500],
+                        "issue_body": issue_body[:500],
                         "template_type": result.payload.get("template_type", ""),
                         "state": result.payload.get("state", ""),
                         "url": result.payload.get("url", ""),
                         "similarity": result.score,
                     }
-                )
+
+            # スコア順でソートして上位limit件を返す
+            similar_issues = sorted(
+                issue_map.values(), key=lambda x: x["similarity"], reverse=True
+            )[:limit]
+
             return similar_issues
         except Exception as e:
             print(f"Warning: Failed to search similar issues: {e}")
             return []
 
-    def upsert_issue(
+    def upsert_issue_chunks(
         self,
         issue_number: int,
-        vector: List[float],
+        chunks: List[str],
+        vectors: List[List[float]],
         title: str,
-        body: str,
         template_type: str,
         state: str,
         url: str,
         labels: List[str],
     ):
-        """Issueをインデックスに登録または更新
+        """Issueをチャンク分割してインデックスに登録または更新
 
         Args:
             issue_number: Issue番号
-            vector: Embeddingベクトル
+            chunks: Issue本文のチャンクリスト
+            vectors: 各チャンクのEmbeddingベクトルリスト
             title: Issueタイトル
-            body: Issue本文
             template_type: テンプレートタイプ
             state: Issueステート（open/closed）
             url: IssueのURL
             labels: ラベルリスト
         """
-        point = PointStruct(
-            id=issue_number,
-            vector=vector,
-            payload={
-                "issue_number": issue_number,
-                "issue_title": title,
-                "issue_body": body[:1000],  # 最初の1000文字のみ保存
-                "template_type": template_type,
-                "state": state,
-                "url": url,
-                "labels": labels,
-            },
-        )
-        self.client.upsert(collection_name=self.COLLECTION_NAME, points=[point])
-        print(f"Issue #{issue_number} indexed successfully")
+        # 既存のチャンクを削除（issue_numberで始まるIDを検索して削除）
+        try:
+            # Note: Qdrant doesn't support prefix search in free tier, so we use scroll
+            # to find all chunks for this issue and delete them
+            existing_points = self.client.scroll(
+                collection_name=self.COLLECTION_NAME,
+                scroll_filter={
+                    "must": [{"key": "issue_number", "match": {"value": issue_number}}]
+                },
+                limit=100,
+            )[0]
+
+            if existing_points:
+                ids_to_delete = [point.id for point in existing_points]
+                self.client.delete(
+                    collection_name=self.COLLECTION_NAME, points_selector=ids_to_delete
+                )
+        except Exception as e:
+            print(f"Warning: Failed to delete existing chunks: {e}")
+
+        # 新しいチャンクを登録
+        points = []
+        for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+            point = PointStruct(
+                id=f"{issue_number}_{i}",
+                vector=vector,
+                payload={
+                    "issue_number": issue_number,
+                    "chunk_index": i,
+                    "issue_title": title,
+                    "issue_body_chunk": chunk,
+                    "template_type": template_type,
+                    "state": state,
+                    "url": url,
+                    "labels": labels,
+                },
+            )
+            points.append(point)
+
+        self.client.upsert(collection_name=self.COLLECTION_NAME, points=points)
+        print(f"Issue #{issue_number} indexed with {len(chunks)} chunks")
 
 
 # ==================== GitHub API ====================
@@ -458,6 +502,61 @@ def fetch_all_issues(
     except subprocess.CalledProcessError as e:
         print(f"Error: Failed to fetch issues: {e}")
         return []
+
+
+# ==================== チャンク処理 ====================
+
+
+def create_issue_chunks(issue_title: str, issue_body: str) -> List[str]:
+    """Issue本文をチャンク分割
+
+    Args:
+        issue_title: Issueタイトル
+        issue_body: Issue本文
+
+    Returns:
+        チャンクリスト
+    """
+    if not RAG_AVAILABLE:
+        # RAG未使用時は全文を1チャンクとして返す
+        return [f"{issue_title}\n{issue_body}"]
+
+    # タイトルと本文を結合
+    full_text = f"{issue_title}\n\n{issue_body}"
+
+    # 短い場合はチャンク分割不要
+    if len(full_text) <= 400:
+        return [full_text]
+
+    # LangChainのRecursiveCharacterTextSplitterを使用
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=400,
+        chunk_overlap=50,
+        separators=["。", "\n\n", "\n", " ", ""],  # 日本語優先の区切り文字
+    )
+
+    chunks = splitter.split_text(full_text)
+    return chunks
+
+
+def create_embeddings_for_chunks(
+    chunks: List[str], embedding_client: "VoyageEmbeddingClient", dimensions: int = 256
+) -> List[List[float]]:
+    """チャンクリストのEmbeddingを生成
+
+    Args:
+        chunks: チャンクリスト
+        embedding_client: Embeddingクライアント
+        dimensions: Embedding次元数
+
+    Returns:
+        Embeddingベクトルリスト
+    """
+    vectors = []
+    for chunk in chunks:
+        vector = embedding_client.generate_embedding(chunk, dimensions=dimensions)
+        vectors.append(vector)
+    return vectors
 
 
 # ==================== メイン処理 ====================
@@ -655,19 +754,23 @@ def index_all_issues(start: int = 1, end: Optional[int] = None):
         try:
             print(f"[{i}/{len(issues)}] Indexing issue #{issue['number']}...")
 
-            # Embeddingベクトル生成
-            text = f"{issue['title']}\n{issue['body']}"
-            vector = voyage_client.generate_embedding(text, dimensions=256)
+            # チャンク分割
+            chunks = create_issue_chunks(issue["title"], issue["body"])
+
+            # 各チャンクのEmbeddingベクトル生成
+            vectors = create_embeddings_for_chunks(
+                chunks, voyage_client, dimensions=256
+            )
 
             # テンプレート判定
             template_type = detector.detect(issue["body"], issue["title"])
 
             # Qdrantに登録
-            qdrant_client.upsert_issue(
+            qdrant_client.upsert_issue_chunks(
                 issue_number=issue["number"],
-                vector=vector,
+                chunks=chunks,
+                vectors=vectors,
                 title=issue["title"],
-                body=issue["body"],
                 template_type=template_type,
                 state=issue["state"],
                 url=issue["url"],
@@ -717,16 +820,18 @@ def update_single_issue(issue_number: int):
     detector = TemplateDetector()
     template_type = detector.detect(issue["body"], issue["title"])
 
-    # Embeddingベクトル生成
-    text = f"{issue['title']}\n{issue['body']}"
-    vector = voyage_client.generate_embedding(text, dimensions=256)
+    # チャンク分割
+    chunks = create_issue_chunks(issue["title"], issue["body"])
+
+    # 各チャンクのEmbeddingベクトル生成
+    vectors = create_embeddings_for_chunks(chunks, voyage_client, dimensions=256)
 
     # Qdrantに登録
-    qdrant_client.upsert_issue(
+    qdrant_client.upsert_issue_chunks(
         issue_number=issue["number"],
-        vector=vector,
+        chunks=chunks,
+        vectors=vectors,
         title=issue["title"],
-        body=issue["body"],
         template_type=template_type,
         state=issue["state"],
         url=issue["url"],
@@ -869,8 +974,13 @@ def main():
             )
             qdrant_client.ensure_collection(vector_size=256)
 
-            text = f"{issue_title}\n{issue_body}"
-            vector = voyage_client.generate_embedding(text, dimensions=256)
+            # チャンク分割
+            chunks = create_issue_chunks(issue_title, issue_body)
+
+            # 各チャンクのEmbeddingベクトル生成
+            vectors = create_embeddings_for_chunks(
+                chunks, voyage_client, dimensions=256
+            )
 
             # IssueのURL生成
             repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -878,11 +988,11 @@ def main():
                 f"https://github.com/{repo}/issues/{issue_number}" if repo else ""
             )
 
-            qdrant_client.upsert_issue(
+            qdrant_client.upsert_issue_chunks(
                 issue_number=int(issue_number),
-                vector=vector,
+                chunks=chunks,
+                vectors=vectors,
                 title=issue_title,
-                body=issue_body,
                 template_type=template_type,
                 state="open",
                 url=issue_url,
