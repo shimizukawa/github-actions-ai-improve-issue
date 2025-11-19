@@ -409,13 +409,7 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None
         print("Error: GITHUB_REPOSITORY not set")
         return None
 
-    cmd = [
-        "gh",
-        "api",
-        f"/repos/{repo}/issues/{issue_number}",
-        "--jq",
-        ".number,.title,.body,.state,.html_url,.labels[].name",
-    ]
+    cmd = ["gh", "api", f"/repos/{repo}/issues/{issue_number}"]
 
     result = subprocess.run(
         cmd,
@@ -427,17 +421,15 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None
             "GH_REPO": repo,
         },
     )
-    lines = result.stdout.strip().split("\n")
-    if len(lines) < 5:
-        return None
-
+    issue_data = json.loads(result.stdout)
+    labels = [label["name"] for label in issue_data["labels"]]
     return {
-        "number": int(lines[0]),
-        "title": lines[1],
-        "body": lines[2] if len(lines) > 2 else "",
-        "state": lines[3] if len(lines) > 3 else "open",
-        "url": lines[4] if len(lines) > 4 else "",
-        "labels": lines[5:] if len(lines) > 5 else [],
+        "number": int(issue_data["number"]),
+        "title": issue_data["title"],
+        "body": issue_data["body"],
+        "state": issue_data["state"],
+        "url": issue_data["html_url"],
+        "labels": labels,
     }
 
 
