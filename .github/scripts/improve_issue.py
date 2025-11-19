@@ -23,6 +23,7 @@ import os
 import sys
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Literal, Optional, List, Dict, Any
 
@@ -38,7 +39,15 @@ RAG_AVAILABLE = False
 try:
     import voyageai
     from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, VectorParams, PointStruct
+    from qdrant_client.models import (
+        Distance,
+        FieldCondition,
+        Filter,
+        MatchValue,
+        PayloadSchemaType,
+        PointStruct,
+        VectorParams,
+    )
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     RAG_AVAILABLE = True
@@ -272,6 +281,12 @@ class QdrantSearchClient:
             )
             print(f"Collection '{self.COLLECTION_NAME}' created")
 
+        self.client.create_payload_index(
+            collection_name=self.COLLECTION_NAME,
+            field_name="issue_number",
+            field_schema=PayloadSchemaType.INTEGER,
+        )
+
     def search_similar_issues(
         self, query_vector: List[float], limit: int = 3
     ) -> List[Dict[str, Any]]:
@@ -353,30 +368,30 @@ class QdrantSearchClient:
             labels: ラベルリスト
         """
         # 既存のチャンクを削除（issue_numberで始まるIDを検索して削除）
-        try:
-            # Note: Qdrant doesn't support prefix search in free tier, so we use scroll
-            # to find all chunks for this issue and delete them
-            existing_points = self.client.scroll(
-                collection_name=self.COLLECTION_NAME,
-                scroll_filter={
-                    "must": [{"key": "issue_number", "match": {"value": issue_number}}]
-                },
-                limit=100,
-            )[0]
+        existing_points, _ = self.client.scroll(
+            collection_name=self.COLLECTION_NAME,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="issue_number",
+                        match=MatchValue(value=issue_number),
+                    )
+                ]
+            ),
+            limit=100,
+        )
 
-            if existing_points:
-                ids_to_delete = [point.id for point in existing_points]
-                self.client.delete(
-                    collection_name=self.COLLECTION_NAME, points_selector=ids_to_delete
-                )
-        except Exception as e:
-            print(f"Warning: Failed to delete existing chunks: {e}")
+        if existing_points:
+            ids_to_delete = [str(point.id) for point in existing_points]
+            self.client.delete(
+                collection_name=self.COLLECTION_NAME, points_selector=ids_to_delete
+            )
 
         # 新しいチャンクを登録
         points = []
         for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
             point = PointStruct(
-                id=f"{issue_number}_{i}",
+                id=str(uuid.uuid4()),
                 vector=vector,
                 payload={
                     "issue_number": issue_number,
@@ -427,7 +442,10 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> Optional[Di
             capture_output=True,
             text=True,
             check=True,
-            env={"GH_TOKEN": github_token},
+            env={
+                "GH_TOKEN": github_token,
+                "GH_REPO": repo,
+            },
         )
         lines = result.stdout.strip().split("\n")
         if len(lines) < 5:
@@ -477,35 +495,37 @@ def fetch_all_issues(
         "number",
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=os.getcwd(),
-            env={"GH_TOKEN": github_token},
-        )
-        issues_data = json.loads(result.stdout)
-        issue_numbers = [issue["number"] for issue in issues_data]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=os.getcwd(),
+        env={
+            "GH_TOKEN": github_token,
+            "GH_REPO": repo,
+        },
+    )
+    issues_data = json.loads(result.stdout)
+    issue_numbers = [issue["number"] for issue in issues_data]
 
-        # 範囲フィルタリング
-        if end is not None:
-            issue_numbers = [n for n in issue_numbers if start <= n <= end]
-        else:
-            issue_numbers = [n for n in issue_numbers if n >= start]
+    # 範囲フィルタリング
+    if end is not None:
+        issue_numbers = [n for n in issue_numbers if start <= n <= end]
+    else:
+        issue_numbers = [n for n in issue_numbers if n >= start]
 
-        # 各Issueの詳細を取得
-        issues = []
-        for num in issue_numbers:
-            issue = fetch_issue_from_github(num, github_token)
-            if issue:
-                issues.append(issue)
+    # 各Issueの詳細を取得
+    issues = []
+    for num in issue_numbers:
+        issue = fetch_issue_from_github(num, github_token)
+        if issue:
+            issues.append(issue)
 
-        return issues
-    except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to fetch issues: {e}")
-        return []
+    return issues
+    # except subprocess.CalledProcessError as e:
+    #     print(f"Error: Failed to fetch issues: {e}")
+    #     return []
 
 
 # ==================== チャンク処理 ====================
