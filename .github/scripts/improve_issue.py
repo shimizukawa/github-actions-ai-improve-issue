@@ -286,44 +286,45 @@ class QdrantSearchClient:
         """
         try:
             # より多くのチャンクを取得してIssueごとに集約
-            results = self.client.search(
+            results = self.client.query_points(
                 collection_name=self.COLLECTION_NAME,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=limit * 5,  # 余裕を持って取得
             )
-
-            # Issueごとに最高スコアのチャンクを集約
-            issue_map = {}
-            for result in results:
-                issue_num = result.payload.get("issue_number")
-                if (
-                    issue_num not in issue_map
-                    or result.score > issue_map[issue_num]["similarity"]
-                ):
-                    # チャンクまたは全文を取得
-                    issue_body = result.payload.get(
-                        "issue_body_chunk"
-                    ) or result.payload.get("issue_body", "")
-
-                    issue_map[issue_num] = {
-                        "issue_number": issue_num,
-                        "issue_title": result.payload.get("issue_title", ""),
-                        "issue_body": issue_body[:500],
-                        "template_type": result.payload.get("template_type", ""),
-                        "state": result.payload.get("state", ""),
-                        "url": result.payload.get("url", ""),
-                        "similarity": result.score,
-                    }
-
-            # スコア順でソートして上位limit件を返す
-            similar_issues = sorted(
-                issue_map.values(), key=lambda x: x["similarity"], reverse=True
-            )[:limit]
-
-            return similar_issues
         except Exception as e:
             print(f"Warning: Failed to search similar issues: {e}")
             return []
+
+        # Issueごとに最高スコアのチャンクを集約
+        issue_map = {}
+        for result in results:
+            breakpoint()
+            issue_num = result.payload.get("issue_number")
+            if (
+                issue_num not in issue_map
+                or result.score > issue_map[issue_num]["similarity"]
+            ):
+                # チャンクまたは全文を取得
+                issue_body = result.payload.get(
+                    "issue_body_chunk"
+                ) or result.payload.get("issue_body", "")
+
+                issue_map[issue_num] = {
+                    "issue_number": issue_num,
+                    "issue_title": result.payload.get("issue_title", ""),
+                    "issue_body": issue_body[:500],
+                    "template_type": result.payload.get("template_type", ""),
+                    "state": result.payload.get("state", ""),
+                    "url": result.payload.get("url", ""),
+                    "similarity": result.score,
+                }
+
+        # スコア順でソートして上位limit件を返す
+        similar_issues = sorted(
+            issue_map.values(), key=lambda x: x["similarity"], reverse=True
+        )[:limit]
+
+        return similar_issues
 
     def upsert_issue_chunks(
         self,
@@ -728,7 +729,7 @@ def index_all_issues(start: int = 1, end: Optional[int] = None):
         sys.exit(1)
 
     print("=== RAG Indexing Mode ===")
-    print(f"Fetching issues from GitHub...")
+    print("Fetching issues from GitHub...")
 
     # Issue一覧取得
     issues = fetch_all_issues(github_token, start, end)
@@ -780,7 +781,7 @@ def index_all_issues(start: int = 1, end: Optional[int] = None):
         except Exception as e:
             print(f"Error indexing issue #{issue['number']}: {e}")
 
-    print(f"\n=== Indexing Complete ===")
+    print("\n=== Indexing Complete ===")
     print(f"Success: {success_count}/{len(issues)} issues")
 
 
@@ -906,33 +907,29 @@ def main():
 
     if rag_available:
         print("RAG mode: Enabled")
-        try:
-            # RAG検索
-            voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
-            qdrant_client = QdrantSearchClient(
-                url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
-            )
+        # RAG検索
+        voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
+        qdrant_client = QdrantSearchClient(
+            url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
+        )
+        qdrant_client.ensure_collection(vector_size=256)
 
-            # クエリベクトル生成
-            query_text = f"{issue_title}\n{issue_body}"
-            query_vector = voyage_client.generate_embedding(query_text, dimensions=256)
+        # クエリベクトル生成
+        query_text = f"{issue_title}\n{issue_body}"
+        query_vector = voyage_client.generate_embedding(query_text, dimensions=256)
 
-            # 類似Issue検索
-            similar_issues = qdrant_client.search_similar_issues(query_vector, limit=3)
+        # 類似Issue検索
+        similar_issues = qdrant_client.search_similar_issues(query_vector, limit=3)
 
-            if similar_issues:
-                print(f"Found {len(similar_issues)} similar issues")
-                for i, sim in enumerate(similar_issues, 1):
-                    print(
-                        f"  {i}. #{sim['issue_number']}: {sim['issue_title'][:50]}... "
-                        f"(similarity: {sim['similarity']:.1%})"
-                    )
-            else:
-                print("No similar issues found")
-        except Exception as e:
-            print(f"Warning: RAG search failed - {e}")
-            print("Falling back to non-RAG mode")
-            similar_issues = None
+        if similar_issues:
+            print(f"Found {len(similar_issues)} similar issues")
+            for i, sim in enumerate(similar_issues, 1):
+                print(
+                    f"  {i}. #{sim['issue_number']}: {sim['issue_title'][:50]}... "
+                    f"(similarity: {sim['similarity']:.1%})"
+                )
+        else:
+            print("No similar issues found")
     else:
         print(f"RAG mode: Disabled ({reason})")
 
