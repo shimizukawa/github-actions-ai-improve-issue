@@ -2,7 +2,7 @@
 # dependencies = [
 #   "google-generativeai>=0.8.3",
 #   "voyageai>=0.2.3",
-#   "qdrant-client>=1.7.0",
+#   "qdrant-client==1.16.*",
 #   "langchain-text-splitters>=0.3.0",
 # ]
 # ///
@@ -286,7 +286,7 @@ class QdrantSearchClient:
         """
         try:
             # より多くのチャンクを取得してIssueごとに集約
-            results = self.client.query_points(
+            response = self.client.query_points(
                 collection_name=self.COLLECTION_NAME,
                 query=query_vector,
                 limit=limit * 5,  # 余裕を持って取得
@@ -295,10 +295,13 @@ class QdrantSearchClient:
             print(f"Warning: Failed to search similar issues: {e}")
             return []
 
+        points = getattr(response, "points", [])
+        if not points:
+            return []
+
         # Issueごとに最高スコアのチャンクを集約
         issue_map = {}
-        for result in results:
-            breakpoint()
+        for result in points:
             issue_num = result.payload.get("issue_number")
             if (
                 issue_num not in issue_map
