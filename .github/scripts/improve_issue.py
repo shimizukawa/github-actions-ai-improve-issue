@@ -25,34 +25,22 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Literal, Optional, List, Dict, Any
+from typing import Literal, Any
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    print("Error: google-generativeai not installed")
-    print("This script should be run with 'uvx' which auto-installs dependencies")
-    sys.exit(1)
+import google.generativeai as genai
+import voyageai
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PayloadSchemaType,
+    PointStruct,
+    VectorParams,
+)
 
-# RAGライブラリは存在チェックのみ（未インストール時もエラーとしない）
-RAG_AVAILABLE = False
-try:
-    import voyageai
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import (
-        Distance,
-        FieldCondition,
-        Filter,
-        MatchValue,
-        PayloadSchemaType,
-        PointStruct,
-        VectorParams,
-    )
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-    RAG_AVAILABLE = True
-except ImportError:
-    pass  # RAG未使用モードで動作
 
 # 型定義
 TemplateType = Literal["feature_request", "bug_report"]
@@ -87,7 +75,7 @@ def load_template_content(template_name: str) -> str:
     if not template_file.exists():
         return ""
 
-    with open(template_file, "r", encoding="utf-8") as f:
+    with open(template_file, encoding="utf-8") as f:
         content = f.read()
 
     # frontmatter (---で囲まれた部分) を除去
@@ -112,7 +100,7 @@ def get_improve_prompt(
     template_name: str,
     issue_body: str,
     issue_title: str = "",
-    similar_issues: Optional[List[Dict[str, Any]]] = None,
+    similar_issues: list[dict[str, Any]] | None = None,
 ) -> str:
     """テンプレートに応じたプロンプトを取得（RAG対応）
 
@@ -233,12 +221,10 @@ class VoyageEmbeddingClient:
             api_key: Voyage AI APIキー
             model: モデル名（デフォルト: voyage-3.5-lite）
         """
-        if not RAG_AVAILABLE:
-            raise RuntimeError("RAG libraries not available")
         self.client = voyageai.Client(api_key=api_key)
         self.model = model
 
-    def generate_embedding(self, text: str, dimensions: int = 256) -> List[float]:
+    def generate_embedding(self, text: str, dimensions: int = 256) -> list[float]:
         """テキストのEmbeddingを生成
 
         Args:
@@ -265,8 +251,6 @@ class QdrantSearchClient:
             url: Qdrant CloudのURL
             api_key: Qdrant APIキー
         """
-        if not RAG_AVAILABLE:
-            raise RuntimeError("RAG libraries not available")
         self.client = QdrantClient(url=url, api_key=api_key)
 
     def ensure_collection(self, vector_size: int = 256):
@@ -288,8 +272,8 @@ class QdrantSearchClient:
         )
 
     def search_similar_issues(
-        self, query_vector: List[float], limit: int = 3
-    ) -> List[Dict[str, Any]]:
+        self, query_vector: list[float], limit: int = 3
+    ) -> list[dict[str, Any]]:
         """類似Issue検索（チャンク対応）
 
         Args:
@@ -347,13 +331,13 @@ class QdrantSearchClient:
     def upsert_issue_chunks(
         self,
         issue_number: int,
-        chunks: List[str],
-        vectors: List[List[float]],
+        chunks: list[str],
+        vectors: list[list[float]],
         title: str,
         template_type: str,
         state: str,
         url: str,
-        labels: List[str],
+        labels: list[str],
     ):
         """Issueをチャンク分割してインデックスに登録または更新
 
@@ -413,7 +397,7 @@ class QdrantSearchClient:
 # ==================== GitHub API ====================
 
 
-def fetch_issue_from_github(issue_number: int, github_token: str) -> Optional[Dict]:
+def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None:
     """GitHub APIからIssue情報を取得
 
     Args:
@@ -465,8 +449,8 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> Optional[Di
 
 
 def fetch_all_issues(
-    github_token: str, start: int = 1, end: Optional[int] = None
-) -> List[Dict]:
+    github_token: str, start: int = 1, end: int | None = None
+) -> list[dict]:
     """全Issue情報を取得
 
     Args:
@@ -531,7 +515,7 @@ def fetch_all_issues(
 # ==================== チャンク処理 ====================
 
 
-def create_issue_chunks(issue_title: str, issue_body: str) -> List[str]:
+def create_issue_chunks(issue_title: str, issue_body: str) -> list[str]:
     """Issue本文をチャンク分割
 
     Args:
@@ -541,10 +525,6 @@ def create_issue_chunks(issue_title: str, issue_body: str) -> List[str]:
     Returns:
         チャンクリスト
     """
-    if not RAG_AVAILABLE:
-        # RAG未使用時は全文を1チャンクとして返す
-        return [f"{issue_title}\n{issue_body}"]
-
     # タイトルと本文を結合
     full_text = f"{issue_title}\n\n{issue_body}"
 
@@ -564,8 +544,8 @@ def create_issue_chunks(issue_title: str, issue_body: str) -> List[str]:
 
 
 def create_embeddings_for_chunks(
-    chunks: List[str], embedding_client: "VoyageEmbeddingClient", dimensions: int = 256
-) -> List[List[float]]:
+    chunks: list[str], embedding_client: "VoyageEmbeddingClient", dimensions: int = 256
+) -> list[list[float]]:
     """チャンクリストのEmbeddingを生成
 
     Args:
@@ -630,7 +610,7 @@ def generate_improved_content(
     issue_body: str,
     issue_title: str,
     api_key: str,
-    similar_issues: Optional[List[Dict[str, Any]]] = None,
+    similar_issues: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     """Issue内容を改善した例文を生成（RAG対応）
 
@@ -660,7 +640,7 @@ def generate_improved_content(
 def format_comment(
     improved_content: str,
     template_name: str,
-    similar_issues: Optional[List[Dict[str, Any]]] = None,
+    similar_issues: list[dict[str, Any]] | None = None,
 ) -> str:
     """コメント用のフォーマット済み文字列を生成（RAG対応）
 
@@ -711,29 +691,7 @@ def format_comment(
     return comment
 
 
-def check_rag_available() -> tuple[bool, str]:
-    """RAG機能が利用可能かチェック
-
-    Returns:
-        (available, reason): 利用可能かどうかと理由
-    """
-    if not RAG_AVAILABLE:
-        return False, "RAG libraries not installed"
-
-    qdrant_url = os.environ.get("QDRANT_URL", "")
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY", "")
-    voyage_api_key = os.environ.get("VOYAGE_API_KEY", "")
-
-    if not qdrant_url or not qdrant_api_key:
-        return False, "QDRANT_URL or QDRANT_API_KEY not set"
-
-    if not voyage_api_key:
-        return False, "VOYAGE_API_KEY not set"
-
-    return True, ""
-
-
-def index_all_issues(start: int = 1, end: Optional[int] = None):
+def index_all_issues(start: int = 1, end: int | None = None):
     """全Issueをインデックス登録（--index-issues モード）
 
     Args:
@@ -741,11 +699,6 @@ def index_all_issues(start: int = 1, end: Optional[int] = None):
         end: 終了Issue番号（Noneの場合は全て）
     """
     # RAG機能チェック
-    rag_available, reason = check_rag_available()
-    if not rag_available:
-        print(f"Error: RAG not available - {reason}")
-        sys.exit(1)
-
     github_token = os.environ.get("GITHUB_TOKEN", "")
     if not github_token:
         print("Error: GITHUB_TOKEN not set")
@@ -815,11 +768,6 @@ def update_single_issue(issue_number: int):
         issue_number: Issue番号
     """
     # RAG機能チェック
-    rag_available, reason = check_rag_available()
-    if not rag_available:
-        print(f"Error: RAG not available - {reason}")
-        sys.exit(1)
-
     github_token = os.environ.get("GITHUB_TOKEN", "")
     if not github_token:
         print("Error: GITHUB_TOKEN not set")
@@ -925,10 +873,13 @@ def main():
     print(f"Body length: {len(issue_body)} characters")
 
     # RAG機能チェック
-    rag_available, reason = check_rag_available()
     similar_issues = None
 
-    if rag_available:
+    if (
+        os.getenv("QDRANT_URL")
+        and os.getenv("QDRANT_API_KEY")
+        and os.getenv("VOYAGE_API_KEY")
+    ):
         print("RAG mode: Enabled")
         # RAG検索
         voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
@@ -954,7 +905,7 @@ def main():
         else:
             print("No similar issues found")
     else:
-        print(f"RAG mode: Disabled ({reason})")
+        print("RAG mode: Disabled")
 
     # 改善内容を生成
     improved_content, template_name = generate_improved_content(
@@ -982,45 +933,37 @@ def main():
     post_comment_via_gh(issue_number, output)
 
     # RAGインデックス登録（例文生成後）
-    if rag_available:
-        try:
-            print("Indexing current issue to RAG...")
-            detector = TemplateDetector()
-            template_type = detector.detect(issue_body, issue_title)
+    print("Indexing current issue to RAG...")
+    detector = TemplateDetector()
+    template_type = detector.detect(issue_body, issue_title)
 
-            voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
-            qdrant_client = QdrantSearchClient(
-                url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
-            )
-            qdrant_client.ensure_collection(vector_size=256)
+    voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
+    qdrant_client = QdrantSearchClient(
+        url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
+    )
+    qdrant_client.ensure_collection(vector_size=256)
 
-            # チャンク分割
-            chunks = create_issue_chunks(issue_title, issue_body)
+    # チャンク分割
+    chunks = create_issue_chunks(issue_title, issue_body)
 
-            # 各チャンクのEmbeddingベクトル生成
-            vectors = create_embeddings_for_chunks(
-                chunks, voyage_client, dimensions=256
-            )
+    # 各チャンクのEmbeddingベクトル生成
+    vectors = create_embeddings_for_chunks(chunks, voyage_client, dimensions=256)
 
-            # IssueのURL生成
-            repo = os.environ.get("GITHUB_REPOSITORY", "")
-            issue_url = (
-                f"https://github.com/{repo}/issues/{issue_number}" if repo else ""
-            )
+    # IssueのURL生成
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    issue_url = f"https://github.com/{repo}/issues/{issue_number}" if repo else ""
 
-            qdrant_client.upsert_issue_chunks(
-                issue_number=int(issue_number),
-                chunks=chunks,
-                vectors=vectors,
-                title=issue_title,
-                template_type=template_type,
-                state="open",
-                url=issue_url,
-                labels=[],
-            )
-            print("Issue indexed successfully")
-        except Exception as e:
-            print(f"Warning: Failed to index issue - {e}")
+    qdrant_client.upsert_issue_chunks(
+        issue_number=int(issue_number),
+        chunks=chunks,
+        vectors=vectors,
+        title=issue_title,
+        template_type=template_type,
+        state="open",
+        url=issue_url,
+        labels=[],
+    )
+    print("Issue indexed successfully")
 
 
 if __name__ == "__main__":
