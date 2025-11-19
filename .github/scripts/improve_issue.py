@@ -556,13 +556,13 @@ def create_embeddings_for_chunks(
     Returns:
         Embeddingベクトルリスト
     """
-    vectors = []
-    for chunk in chunks:
-        vector = embedding_client.generate_embedding(chunk, dimensions=dimensions)
-        vectors.append(vector)
-    return vectors
-
-
+    # Batch embed all chunks at once
+    result = embedding_client.client.embed(
+        texts=chunks,
+        model=embedding_client.model,
+        output_dimension=dimensions
+    )
+    return result.embeddings
 # ==================== メイン処理 ====================
 
 
