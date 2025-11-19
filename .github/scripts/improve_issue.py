@@ -264,12 +264,11 @@ class QdrantSearchClient:
                 vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
             )
             print(f"Collection '{self.COLLECTION_NAME}' created")
-
-        self.client.create_payload_index(
-            collection_name=self.COLLECTION_NAME,
-            field_name="issue_number",
-            field_schema=PayloadSchemaType.INTEGER,
-        )
+            self.client.create_payload_index(
+                collection_name=self.COLLECTION_NAME,
+                field_name="issue_number",
+                field_schema=PayloadSchemaType.INTEGER,
+            )
 
     def search_similar_issues(
         self, query_vector: list[float], limit: int = 3
@@ -283,16 +282,12 @@ class QdrantSearchClient:
         Returns:
             類似Issue情報のリスト
         """
-        try:
-            # より多くのチャンクを取得してIssueごとに集約
-            response = self.client.query_points(
-                collection_name=self.COLLECTION_NAME,
-                query=query_vector,
-                limit=limit * 5,  # 余裕を持って取得
-            )
-        except Exception as e:
-            print(f"Warning: Failed to search similar issues: {e}")
-            return []
+        # より多くのチャンクを取得してIssueごとに集約
+        response = self.client.query_points(
+            collection_name=self.COLLECTION_NAME,
+            query=query_vector,
+            limit=limit * 5,  # 余裕を持って取得
+        )
 
         points = getattr(response, "points", [])
         if not points:
@@ -420,32 +415,28 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None
         ".number,.title,.body,.state,.html_url,.labels[].name",
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            env={
-                "GH_TOKEN": github_token,
-                "GH_REPO": repo,
-            },
-        )
-        lines = result.stdout.strip().split("\n")
-        if len(lines) < 5:
-            return None
-
-        return {
-            "number": int(lines[0]),
-            "title": lines[1],
-            "body": lines[2] if len(lines) > 2 else "",
-            "state": lines[3] if len(lines) > 3 else "open",
-            "url": lines[4] if len(lines) > 4 else "",
-            "labels": lines[5:] if len(lines) > 5 else [],
-        }
-    except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to fetch issue #{issue_number}: {e}")
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={
+            "GH_TOKEN": github_token,
+            "GH_REPO": repo,
+        },
+    )
+    lines = result.stdout.strip().split("\n")
+    if len(lines) < 5:
         return None
+
+    return {
+        "number": int(lines[0]),
+        "title": lines[1],
+        "body": lines[2] if len(lines) > 2 else "",
+        "state": lines[3] if len(lines) > 3 else "open",
+        "url": lines[4] if len(lines) > 4 else "",
+        "labels": lines[5:] if len(lines) > 5 else [],
+    }
 
 
 def fetch_all_issues(
@@ -507,9 +498,6 @@ def fetch_all_issues(
             issues.append(issue)
 
     return issues
-    # except subprocess.CalledProcessError as e:
-    #     print(f"Error: Failed to fetch issues: {e}")
-    #     return []
 
 
 # ==================== チャンク処理 ====================
@@ -728,34 +716,31 @@ def index_all_issues(start: int = 1, end: int | None = None):
     # 各Issueをインデックス登録
     success_count = 0
     for i, issue in enumerate(issues, 1):
-        try:
-            print(f"[{i}/{len(issues)}] Indexing issue #{issue['number']}...")
+        print(f"[{i}/{len(issues)}] Indexing issue #{issue['number']}...")
 
-            # チャンク分割
-            chunks = create_issue_chunks(issue["title"], issue["body"])
+        # チャンク分割
+        chunks = create_issue_chunks(issue["title"], issue["body"])
 
-            # 各チャンクのEmbeddingベクトル生成
-            vectors = create_embeddings_for_chunks(
-                chunks, voyage_client, dimensions=256
-            )
+        # 各チャンクのEmbeddingベクトル生成
+        vectors = create_embeddings_for_chunks(
+            chunks, voyage_client, dimensions=256
+        )
 
-            # テンプレート判定
-            template_type = detector.detect(issue["body"], issue["title"])
+        # テンプレート判定
+        template_type = detector.detect(issue["body"], issue["title"])
 
-            # Qdrantに登録
-            qdrant_client.upsert_issue_chunks(
-                issue_number=issue["number"],
-                chunks=chunks,
-                vectors=vectors,
-                title=issue["title"],
-                template_type=template_type,
-                state=issue["state"],
-                url=issue["url"],
-                labels=issue.get("labels", []),
-            )
-            success_count += 1
-        except Exception as e:
-            print(f"Error indexing issue #{issue['number']}: {e}")
+        # Qdrantに登録
+        qdrant_client.upsert_issue_chunks(
+            issue_number=issue["number"],
+            chunks=chunks,
+            vectors=vectors,
+            title=issue["title"],
+            template_type=template_type,
+            state=issue["state"],
+            url=issue["url"],
+            labels=issue.get("labels", []),
+        )
+        success_count += 1
 
     print("\n=== Indexing Complete ===")
     print(f"Success: {success_count}/{len(issues)} issues")
