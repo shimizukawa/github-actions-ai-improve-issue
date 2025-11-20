@@ -15,7 +15,21 @@
 
 #### Workflow設計
 
-`issue_auto_improve.yml` は `issues.opened` をトリガーとし、`ai-processing` / `ai-processed` のラベルがあるIssueをスキップしながら、`uv run` スクリプトを実行します。成功時には `ai-processed` を付与し、失敗時には `ai-processing` のみを削除して再実行可能な状態を保ちます。
+`issue_auto_improve.yml` は、次の2種類のトリガーとジョブで構成します。
+
+1. **提案生成ジョブ（improve-issue）**
+     - トリガー: `issues.labeled`
+     - 条件: `github.event.label.name == 'ai-improve'`
+     - 役割:
+         - `improve_issue.py` を通常モードで実行し、LLM による例文コメントを投稿する
+         - RAGが有効な場合は類似Issueを検索してプロンプトに含める
+         - 処理完了後に `ai-improve` ラベルを削除する
+
+2. **インデックス更新ジョブ（update-index）**
+     - トリガー: `issues.edited`, `issues.closed`, `issues.reopened`
+     - 役割:
+         - `improve_issue.py --update-single-issue <issue_number>` を実行し、Qdrant上のRAGインデックスを最新のIssue本文に更新する
+         - コメント投稿は行わない（静かなバックグラウンド更新）
 
 #### スクリプト設計
 
@@ -30,7 +44,7 @@
    - ログに動作モードを出力（`[INFO] RAG mode: enabled` / `[INFO] RAG mode: disabled (missing: QDRANT_URL)`）
 4. `get_improve_prompt` または `get_improve_prompt_with_rag` でプロンプトを構築
 5. `LLMClient`（`gemini-2.5-flash`）で `generate` を呼び出し、出力を `format_comment` で整形
-6. `post_comment_via_gh` が `gh issue comment` で Issue に投稿し、`ai-processing` → `ai-processed` のラベル遷移を行う
+6. `post_comment_via_gh` が `gh issue comment` で Issue に投稿する
 7. `--dry-run` モードではコメント投稿をスキップし、結果を標準出力に表示
 
 #### ローカル検証モード
@@ -161,7 +175,7 @@ collection_config = {
 
 **インデックス更新方針:**
 
-1. **イベント駆動型更新**: Issue作成・編集・状態変更時に自動更新（コメント投稿は現時点ではトリガーに含めない）
+1. **イベント駆動型更新**: Issue編集時に自動更新（コメント投稿や状態変更は現時点ではトリガーに含めない）
 2. **初回インデックス**: CLIコマンドで既存Issue一括登録
 3. **定期同期不要**: イベント駆動で常に最新状態を維持
 
@@ -179,31 +193,27 @@ uv run .github/scripts/improve_issue.py --index-issues --issue-range 1-100
 
 ```yaml
 # .github/workflows/issue_auto_improve.yml に統合
-# Issue作成時: RAG検索 + 例文生成 + インデックス登録を同時実行
+# ai-improve ラベル付与時: 例文生成のみ
 # Issue編集時: インデックス更新のみ
 
 on:
     issues:
-        types: [opened, edited, closed, reopened]
+        types: [labeled, edited]
 
 jobs:
-  # Issue作成時: 例文生成 + インデックス登録
-  improve-issue:
-    if: github.event.action == 'opened'
-    # ... (既存処理) ...
-    # 処理完了後にインデックス登録
+    # 提案生成: ai-improve ラベル付与時のみ実行
+    improve-issue:
+        if: |
+            github.event_name == 'issues' &&
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'ai-improve'
+        # ... (既存処理) ...
 
-  # Issue更新時: インデックス更新のみ
+    # Issue編集時: インデックス更新のみ
     update-index:
         if: |
-            (
-                github.event_name == 'issues' &&
-                (
-                    github.event.action == 'edited' ||
-                    github.event.action == 'closed' ||
-                    github.event.action == 'reopened'
-                )
-            )
+            github.event_name == 'issues' &&
+            github.event.action == 'edited'
     runs-on: ubuntu-slim
     timeout-minutes: 1
     steps:

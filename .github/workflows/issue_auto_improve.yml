@@ -2,9 +2,7 @@ name: Issue Auto Improve (Phase 2)
 
 on:
   issues:
-    types: [opened, edited, closed, reopened]
-  issue_comment:
-    types: [created]
+    types: [labeled, edited, closed, reopened]
 
 jobs:
   improve-issue:
@@ -15,11 +13,11 @@ jobs:
       contents: read
       issues: write
     
-    # Issue作成時のみ実行（ai-processing, ai-processed ラベルがない場合）
+    # ai-improve ラベル付与時のみ実行
     if: |
-      github.event.action == 'opened' &&
-      !contains(github.event.issue.labels.*.name, 'ai-processing') &&
-      !contains(github.event.issue.labels.*.name, 'ai-processed')
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ai-improve'
     
     steps:
       - name: Checkout repository
@@ -29,12 +27,6 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
-      
-      - name: Add processing label
-        run: |
-          gh issue edit ${{ github.event.issue.number }} --add-label "ai-processing"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Improve issue content
         id: improve
@@ -52,17 +44,10 @@ jobs:
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       
-      - name: Mark as processed
+      - name: Remove ai-improve label on success
         if: success()
         run: |
-          gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing" --add-label "ai-processed"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Remove processing label on failure
-        if: failure()
-        run: |
-          gh issue edit ${{ github.event.issue.number }} --remove-label "ai-processing"
+          gh issue edit ${{ github.event.issue.number }} --remove-label "ai-improve"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -74,14 +59,10 @@ jobs:
       contents: read
       issues: read
     
-    # Issue更新時のみ実行（コメント投稿では実行しない）
+    # Issue編集時のみ実行（コメント投稿では実行しない）
     if: |
       github.event_name == 'issues' &&
-      (
-        github.event.action == 'edited' ||
-        github.event.action == 'closed' ||
-        github.event.action == 'reopened'
-      )
+      github.event.action == 'edited'
     
     steps:
       - name: Checkout repository

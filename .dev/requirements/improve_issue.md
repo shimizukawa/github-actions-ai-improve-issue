@@ -73,13 +73,15 @@
    例: 「Mermaid図の拡大縮小機能を追加したい」
    ```
 
-2. GitHub Actions Workflowが自動起動
+2. ユーザーが「このIssueにAI補助をかけたい」と判断した場合、`ai-improve` ラベルを付与
 
-3. 簡易記述から適切なテンプレートを判定
+3. `ai-improve` ラベル付与をトリガーに GitHub Actions Workflow が起動
+
+4. 簡易記述から適切なテンプレートを判定
    - 機能要件Issue（feature_request）
    - バグ報告（bug_report）
 
-4. RAGで類似Issue情報を検索・取得
+4. RAGで類似Issue情報を検索・取得（RAG有効時のみ）
 
 5. 判定したテンプレートに沿って、過去事例を参考にした具体的な文章を生成
 
@@ -101,6 +103,8 @@
 7. ユーザーは生成された例文を見て、実情に合わせて微修正
    - Issue本文を更新 or コメント内容を参考に追記
 
+8. 処理完了後、Workflow は `ai-improve` ラベルを自動で削除（再度ラベルを付ければ再ブラッシュアップ可能）
+
 ### 将来的な拡張
 
 - Issue本文が更新された際にも再度ブラッシュアップを実行
@@ -110,11 +114,10 @@
 
 ### Phase 1（実装済み）
 
-- [x] Issue作成時にGitHub Actions Workflowが自動起動する（`on: issues.types: [opened]`）
-- [x] `ai-processing` / `ai-processed` ラベルで状態を管理し、重複Commentと多重実行を防止
+- [x] `ai-improve` ラベル付与時にGitHub Actions Workflowが起動する（`on: issues.types: [labeled]`）
 - [x] キーワードベースで `feature_request` / `bug_report` のテンプレートを選定
 - [x] `.github/ISSUE_TEMPLATE` に沿ったプロンプトを組み立てて、Gemini API (`gemini-2.5-flash`) から例文を生成
-- [x] `gh issue comment` でフォーマット済みコメントを投稿し、`ai-processed` を付与
+- [x] `gh issue comment` でフォーマット済みコメントを投稿する
 - [x] `uv run .github/scripts/improve_issue.py --dry-run` でローカル検証が行える
 
 ### Phase 2 以降（未実装・将来対応）
@@ -197,14 +200,18 @@
 
 ```
 [GitHub Issue作成]
-      ↓
-[Workflow起動]  # `issue` イベント（opened）
-      ↓
+   ↓
+[ユーザーが ai-improve ラベルを付与]
+   ↓
+[Workflow起動]  # `issues` イベント（labeled, label.name == "ai-improve"）
+   ↓
 [TemplateDetector]  # キーワード判定＋テンプレート読み込み
-      ↓
+   ↓
 [LLM (Gemini 2.5 Flash) で例文生成]
-      ↓
-[コメント投稿（gh） + ラベル更新（ai-processing → ai-processed）]
+   ↓
+[コメント投稿（gh）]
+   ↓
+[Workflowが ai-improve ラベルを削除]
 ```
 
 ### ローカル検証モード
