@@ -95,7 +95,7 @@ Issue本文とタイトルから、以下のテンプレートを自動判定し
 ### Workflowが起動しない
 
 - Issue本文が10文字以上あるか確認
-- `ai-processing`, `ai-processed` ラベルがついていないか確認
+- Issueに `ai-improve` ラベルが正しく付与されているか確認
 
 ### エラーコメントが投稿される
 
