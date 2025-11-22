@@ -1,0 +1,85 @@
+name: Issue Auto Improve (Phase 2)
+
+on:
+  issues:
+    types: [labeled, edited, closed, reopened]
+
+jobs:
+  improve-issue:
+    runs-on: ubuntu-slim
+    timeout-minutes: 3
+    
+    permissions:
+      contents: read
+      issues: write
+    
+    # ai-improve ラベル付与時のみ実行
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ai-improve'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      
+      - name: Improve issue content
+        id: improve
+        run: |
+          uv run .github/scripts/improve_issue.py
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # RAG環境変数（設定されていない場合はRAG未使用モードで動作）
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      
+      - name: Remove ai-improve label on success
+        if: success()
+        run: |
+          gh issue edit ${{ github.event.issue.number }} --remove-label "ai-improve"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-index:
+    runs-on: ubuntu-slim
+    timeout-minutes: 1
+    
+    permissions:
+      contents: read
+      issues: read
+    
+    # Issue編集時のみ実行（コメント投稿では実行しない）
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'edited'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      
+      - name: Update Qdrant index
+        run: |
+          uv run .github/scripts/improve_issue.py --update-single-issue ${{ github.event.issue.number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        continue-on-error: true  # RAG未設定時もエラーとしない
