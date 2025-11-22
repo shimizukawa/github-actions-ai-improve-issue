@@ -18,6 +18,7 @@ PEP-723対応: uvx で実行可能
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -45,6 +46,63 @@ from qdrant_client.models import (
 
 # 型定義
 TemplateType = Literal["feature_request", "bug_report"]
+
+
+# ==================== 設定管理 ====================
+
+
+@dataclasses.dataclass
+class Config:
+    """環境変数の一元管理クラス
+    """
+    # GitHub関連（GitHub Actions実行時に自動設定）
+    github_repository: str = dataclasses.field(default_factory=lambda: os.environ.get("GITHUB_REPOSITORY", ""))
+    github_token: str = dataclasses.field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
+
+    # Issue情報（通常モード実行時に必要）
+    issue_body: str = dataclasses.field(default_factory=lambda: os.environ.get("ISSUE_BODY", ""))
+    issue_title: str = dataclasses.field(default_factory=lambda: os.environ.get("ISSUE_TITLE", ""))
+    issue_number: str = dataclasses.field(default_factory=lambda: os.environ.get("ISSUE_NUMBER", ""))
+
+    # LLM API（通常モード実行時に必須）
+    llm_api_key: str = dataclasses.field(default_factory=lambda: os.environ.get("LLM_API_KEY", ""))
+
+    # RAG機能（オプション - 全て設定された場合のみ有効化）
+    qdrant_url: str  = dataclasses.field(default_factory=lambda: os.environ.get("QDRANT_URL", ""))
+    qdrant_api_key: str = dataclasses.field(default_factory=lambda: os.environ.get("QDRANT_API_KEY", ""))
+    voyage_api_key: str = dataclasses.field(default_factory=lambda: os.environ.get("VOYAGE_API_KEY", ""))
+
+    @property
+    def is_rag_enabled(self) -> bool:
+        """RAG機能が有効かどうか"""
+        return bool(self.qdrant_url and self.qdrant_api_key and self.voyage_api_key)
+
+    def validate_for_normal_mode(self):
+        """通常モード実行時の必須環境変数チェック"""
+        if not self.issue_number:
+            raise ValueError("Error: ISSUE_NUMBER not set")
+        if not self.llm_api_key:
+            raise ValueError("Error: LLM_API_KEY not set")
+
+    def validate_for_github_operations(self):
+        """GitHub操作が必要な場合の環境変数チェック"""
+        if not self.github_token:
+            raise ValueError("Error: GITHUB_TOKEN not set")
+        if not self.github_repository:
+            raise ValueError("Error: GITHUB_REPOSITORY not set")
+
+    def validate_for_rag_operations(self):
+        """RAG操作が必要な場合の環境変数チェック"""
+        if not self.voyage_api_key:
+            raise ValueError("Error: VOYAGE_API_KEY not set")
+        if not self.qdrant_url:
+            raise ValueError("Error: QDRANT_URL not set")
+        if not self.qdrant_api_key:
+            raise ValueError("Error: QDRANT_API_KEY not set")
+
+# 設定を読み込み
+config = Config()
+
 
 # テンプレートタイプに応じた役割と指示
 ROLE_AND_INSTRUCTIONS = {
@@ -409,22 +467,20 @@ class QdrantSearchClient:
 # ==================== GitHub API ====================
 
 
-def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None:
+def fetch_issue_from_github(issue_number: int) -> dict | None:
     """GitHub APIからIssue情報を取得
 
     Args:
         issue_number: Issue番号
-        github_token: GitHub Token
 
     Returns:
         Issue情報の辞書、取得失敗時はNone
     """
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if not repo:
+    if not config.github_repository:
         print("Error: GITHUB_REPOSITORY not set")
         return None
 
-    cmd = ["gh", "api", f"/repos/{repo}/issues/{issue_number}"]
+    cmd = ["gh", "api", f"/repos/{config.github_repository}/issues/{issue_number}"]
 
     result = subprocess.run(
         cmd,
@@ -432,8 +488,8 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None
         text=True,
         check=True,
         env={
-            "GH_TOKEN": github_token,
-            "GH_REPO": repo,
+            "GH_TOKEN": config.github_token,
+            "GH_REPO": config.github_repository,
         },
     )
     issue_data = json.loads(result.stdout)
@@ -448,21 +504,17 @@ def fetch_issue_from_github(issue_number: int, github_token: str) -> dict | None
     }
 
 
-def fetch_all_issues(
-    github_token: str, start: int = 1, end: int | None = None
-) -> list[dict]:
+def fetch_all_issues(start: int = 1, end: int | None = None) -> list[dict]:
     """全Issue情報を取得
 
     Args:
-        github_token: GitHub Token
         start: 開始Issue番号
         end: 終了Issue番号（Noneの場合は全て）
 
     Returns:
         Issue情報のリスト
     """
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if not repo:
+    if not config.github_repository:
         print("Error: GITHUB_REPOSITORY not set")
         return []
 
@@ -486,8 +538,8 @@ def fetch_all_issues(
         check=True,
         cwd=os.getcwd(),
         env={
-            "GH_TOKEN": github_token,
-            "GH_REPO": repo,
+            "GH_TOKEN": config.github_token,
+            "GH_REPO": config.github_repository,
         },
     )
     issues_data = json.loads(result.stdout)
@@ -502,7 +554,7 @@ def fetch_all_issues(
     # 各Issueの詳細を取得
     issues = []
     for num in issue_numbers:
-        issue = fetch_issue_from_github(num, github_token)
+        issue = fetch_issue_from_github(num)
         if issue:
             issues.append(issue)
 
@@ -695,17 +747,14 @@ def index_all_issues(start: int = 1, end: int | None = None):
         start: 開始Issue番号
         end: 終了Issue番号（Noneの場合は全て）
     """
-    # RAG機能チェック
-    github_token = os.environ.get("GITHUB_TOKEN", "")
-    if not github_token:
-        print("Error: GITHUB_TOKEN not set")
-        sys.exit(1)
+    config.validate_for_github_operations()
+    config.validate_for_rag_operations()
 
     print("=== RAG Indexing Mode ===")
     print("Fetching issues from GitHub...")
 
     # Issue一覧取得
-    issues = fetch_all_issues(github_token, start, end)
+    issues = fetch_all_issues(start, end)
     if not issues:
         print("No issues found")
         sys.exit(0)
@@ -713,9 +762,9 @@ def index_all_issues(start: int = 1, end: int | None = None):
     print(f"Found {len(issues)} issues to index")
 
     # クライアント初期化
-    voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
+    voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
-        url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
+        url=config.qdrant_url, api_key=config.qdrant_api_key
     )
     qdrant_client.ensure_collection(vector_size=256)
 
@@ -759,24 +808,21 @@ def update_single_issue(issue_number: int):
     Args:
         issue_number: Issue番号
     """
-    # RAG機能チェック
-    github_token = os.environ.get("GITHUB_TOKEN", "")
-    if not github_token:
-        print("Error: GITHUB_TOKEN not set")
-        sys.exit(1)
+    config.validate_for_github_operations()
+    config.validate_for_rag_operations()
 
     print(f"=== Update Single Issue #{issue_number} ===")
 
     # Issue情報取得
-    issue = fetch_issue_from_github(issue_number, github_token)
+    issue = fetch_issue_from_github(issue_number)
     if not issue:
         print(f"Error: Failed to fetch issue #{issue_number}")
         sys.exit(1)
 
     # クライアント初期化
-    voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
+    voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
-        url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
+        url=config.qdrant_url, api_key=config.qdrant_api_key
     )
     qdrant_client.ensure_collection(vector_size=256)
 
@@ -840,48 +886,36 @@ def main():
         sys.exit(0)
 
     # 通常モード: Issue改善
-    # 環境変数取得
-    issue_body = os.environ.get("ISSUE_BODY", "")
-    issue_title = os.environ.get("ISSUE_TITLE", "")
-    issue_number = os.environ.get("ISSUE_NUMBER", "")
-    api_key = os.environ.get("LLM_API_KEY", "")
-
-    # 環境変数チェック
-    if not issue_number:
-        print("Error: ISSUE_NUMBER not set")
-        sys.exit(1)
-
-    if not api_key:
-        print("Error: LLM_API_KEY not set")
+    # 必須環境変数チェック
+    try:
+        config.validate_for_normal_mode()
+    except ValueError as e:
+        print(str(e))
         sys.exit(1)
 
     # 改善が必要かチェック
-    if not check_needs_improvement(issue_body, issue_title):
-        print(f"Issue #{issue_number} does not need improvement (too short)")
+    if not check_needs_improvement(config.issue_body, config.issue_title):
+        print(f"Issue #{config.issue_number} does not need improvement (too short)")
         sys.exit(0)
 
-    print(f"Processing issue #{issue_number}")
-    print(f"Title: {issue_title}")
-    print(f"Body length: {len(issue_body)} characters")
+    print(f"Processing issue #{config.issue_number}")
+    print(f"Title: {config.issue_title}")
+    print(f"Body length: {len(config.issue_body)} characters")
 
     # RAG機能チェック
     similar_issues = None
 
-    if (
-        os.getenv("QDRANT_URL")
-        and os.getenv("QDRANT_API_KEY")
-        and os.getenv("VOYAGE_API_KEY")
-    ):
+    if config.is_rag_enabled:
         print("RAG mode: Enabled")
         # RAG検索
-        voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
+        voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
         qdrant_client = QdrantSearchClient(
-            url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
+            url=config.qdrant_url, api_key=config.qdrant_api_key
         )
         qdrant_client.ensure_collection(vector_size=256)
 
         # クエリベクトル生成
-        query_text = f"{issue_title}\n{issue_body}"
+        query_text = f"{config.issue_title}\n{config.issue_body}"
         query_vector = voyage_client.generate_embedding(query_text, dimensions=256)
 
         # 類似Issue検索
@@ -901,7 +935,7 @@ def main():
 
     # 改善内容を生成
     improved_content, template_name = generate_improved_content(
-        issue_body, issue_title, api_key, similar_issues
+        config.issue_body, config.issue_title, config.llm_api_key, similar_issues
     )
 
     # コメント用にフォーマット
@@ -917,39 +951,45 @@ def main():
         sys.exit(0)
 
     # 通常モード: GitHub CLIでコメント投稿
-    github_token = os.environ.get("GITHUB_TOKEN", "")
-    if not github_token:
+    if not config.github_token:
         print("Error: GITHUB_TOKEN not found")
         sys.exit(1)
 
-    post_comment_via_gh(issue_number, output)
+    post_comment_via_gh(config.issue_number, output)
 
     # RAGインデックス登録（例文生成後）
+    if not config.is_rag_enabled:
+        print("QDRANT_* and VOYAGE_* env values are required to enable RAG mode.")
+        sys.exit(0)
+
     print("Indexing current issue to RAG...")
     detector = TemplateDetector()
-    template_type = detector.detect(issue_body, issue_title)
+    template_type = detector.detect(config.issue_body, config.issue_title)
 
-    voyage_client = VoyageEmbeddingClient(api_key=os.environ["VOYAGE_API_KEY"])
+    voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
-        url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"]
+        url=config.qdrant_url, api_key=config.qdrant_api_key
     )
     qdrant_client.ensure_collection(vector_size=256)
 
     # チャンク分割
-    chunks = create_issue_chunks(issue_title, issue_body)
+    chunks = create_issue_chunks(config.issue_title, config.issue_body)
 
     # 各チャンクのEmbeddingベクトル生成
     vectors = create_embeddings_for_chunks(chunks, voyage_client, dimensions=256)
 
     # IssueのURL生成
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    issue_url = f"https://github.com/{repo}/issues/{issue_number}" if repo else ""
+    issue_url = (
+        f"https://github.com/{config.github_repository}/issues/{config.issue_number}"
+        if config.github_repository
+        else ""
+    )
 
     qdrant_client.upsert_issue_chunks(
-        issue_number=int(issue_number),
+        issue_number=int(config.issue_number),
         chunks=chunks,
         vectors=vectors,
-        title=issue_title,
+        title=config.issue_title,
         template_type=template_type,
         state="open",
         url=issue_url,
