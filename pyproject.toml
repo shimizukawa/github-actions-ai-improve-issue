@@ -1,0 +1,15 @@
+[project]
+name = "github-actions-ai-improve-issue"
+version = "0.1.0"
+description = "A feature that automatically generates specific text following an appropriate template and presents it as a comment, after the user writes 1-2 lines describing their objective in a simple blank Issue."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-generativeai>=0.8.3",
+    "voyageai>=0.2.3",
+    "qdrant-client==1.16.*",
+    "langchain-text-splitters>=0.3.0",
+]
+
+[project.scripts]
+improve-issue = "github_actions_ai_improve_issue.main:main"
