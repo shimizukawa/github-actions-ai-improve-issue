@@ -14,11 +14,18 @@ templates:
       - 各項目は箇条書きで、少なくとも2-3項目記述してください
     keywords:
       - 機能
+      - feature
       - 追加
+      - add
       - 変更
+      - change
       - 改善
+      - improve
+      - improvement
       - したい
+      - want
       - 欲しい
+      - need
       - 必要
 
   bug_report:
@@ -32,8 +39,14 @@ templates:
       - Markdown形式で出力してください
     keywords:
       - バグ
+      - bug
       - エラー
+      - error
       - 不具合
       - 動かない
       - 失敗
+      - fail
+      - failed
       - 問題
+      - issue
+      - problem

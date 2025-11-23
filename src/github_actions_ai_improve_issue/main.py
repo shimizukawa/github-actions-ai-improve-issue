@@ -245,7 +245,7 @@ def load_settings() -> ImproveIssueSettings:
 
 def load_template_content(template: TemplateConfig) -> str:
     """ISSUE_TEMPLATEファイルから実際のテンプレート内容を読み込む"""
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = find_repo_root()
     template_file = (
         repo_root / ".github" / "ISSUE_TEMPLATE" / f"{template.issue_template_file}.md"
     )
