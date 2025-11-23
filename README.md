@@ -33,11 +33,11 @@
 ### CLIからの実行
 ```bash
 # インストールして実行
-$ pip install github-actions-ai-improve-issue
-$ improve-issue
+$ pip install ai-improve-issue
+$ ai-improve-issue
 
 # GitHubから直接実行
-uvx --from git+https://github.com/shimizukawa/github-actions-ai-improve-issue improve-issue
+uvx --from git+https://github.com/shimizukawa/ai-improve-issue ai-improve-issue
 ```
 
 
@@ -52,7 +52,7 @@ export ISSUE_NUMBER="123"
 export LLM_API_KEY="your-gemini-api-key"
 
 # dry-runモードで実行（コメント投稿なし、コンソールに出力）
-uv run -m github_actions_ai_improve_issue --dry-run
+uv run -m ai_improve_issue --dry-run
 ```
 
 ## 設定ファイル
@@ -62,8 +62,8 @@ uv run -m github_actions_ai_improve_issue --dry-run
 設定ファイルが必須です。設定ファイルが見つからない場合はエラーで終了します。
 
 設定ファイルの配置場所:
-1. 環境変数 `IMPROVE_ISSUE_CONFIG` で指定したパス（優先）
-2. リポジトリルート直下の `.improve_issue.yml`（デフォルト）
+1. 環境変数 `ai_improve_issue_CONFIG` で指定したパス（優先）
+2. リポジトリルート直下の `.ai_improve_issue.yml`（デフォルト）
 
 ### 設定ファイルの構造
 
@@ -119,7 +119,7 @@ templates:
 ### テンプレートのカスタマイズ
 
 テンプレートを追加・変更する場合:
-1. `.improve_issue.yml` にテンプレート定義を追加
+1. `.ai_improve_issue.yml` にテンプレート定義を追加
 2. `.github/ISSUE_TEMPLATE/` に対応する Issue テンプレートファイルを配置
 
 ## テンプレート判定
@@ -184,7 +184,7 @@ Issue本文とタイトルから、設定ファイルで定義されたテンプ
 ### ファイル構成
 
 ```
-.improve_issue.yml              # 設定ファイル（必須）
+.ai_improve_issue.yml              # 設定ファイル（必須）
 README.md                       # this file
 .github/
 ├── ISSUE_TEMPLATE/             # templates
@@ -193,7 +193,7 @@ README.md                       # this file
 └── workflows/
     └── issue_auto_improve.yml  # GitHub Actions Workflow
 src/
-└── github_actions_ai_improve_issue/
+└── ai_improve_issue/
     ├── __init__.py
     └── main.py                 # メインスクリプト
 ```
@@ -204,19 +204,19 @@ src/
 
 1. **通常モード**: GitHub Actionsから実行、コメント投稿、RAG検索（環境変数設定時）
    ```bash
-   uv run -m github_actions_ai_improve_issue
+   uv run -m ai_improve_issue
    ```
 2. **--dry-run**: ローカル検証用、コメント投稿スキップ
    ```bash
-   uv run -m github_actions_ai_improve_issue --dry-run
+   uv run -m ai_improve_issue --dry-run
    ```
 3. **--index-issues**: 全Issue一括インデックス作成（初回セットアップ用）
    ```bash
-   uv run -m github_actions_ai_improve_issue --index-issues
+   uv run -m ai_improve_issue --index-issues
    ```
 4. **--update-single-issue N**: 単一Issue更新（Issue番号Nを指定）
    ```bash
-   uv run -m github_actions_ai_improve_issue --update-single-issue 123
+   uv run -m ai_improve_issue --update-single-issue 123
    ```
 
 ### RAGインデックス管理
@@ -232,17 +232,17 @@ export QDRANT_API_KEY="your-qdrant-api-key"
 export VOYAGE_API_KEY="your-voyage-api-key"
 
 # 全Issueをインデックス
-uv run -m github_actions_ai_improve_issue --index-issues
+uv run -m ai_improve_issue --index-issues
 
 # 範囲指定も可能
-uv run -m github_actions_ai_improve_issue --index-issues --start 1 --end 100
+uv run -m ai_improve_issue --index-issues --start 1 --end 100
 ```
 
 #### 単一Issue更新
 
 ```bash
 # Issue番号123を更新
-uv run -m github_actions_ai_improve_issue --update-single-issue 123
+uv run -m ai_improve_issue --update-single-issue 123
 ```
 
 #### 自動更新
@@ -260,6 +260,6 @@ GitHub Actionsにより、以下のタイミングで自動的にインデック
 
 ## 関連ドキュメント
 
-- 要件書: `.dev/requirements/improve_issue.md`
+- 要件書: `.dev/requirements/ai_improve_issue.md`
 - 設計書: `.dev/designs/issue_auto_improve_設計.md`
 - 技術検証: `.dev/designs/issue_auto_improve_技術検証.md`

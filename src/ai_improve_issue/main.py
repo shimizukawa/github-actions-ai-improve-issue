@@ -1,12 +1,3 @@
-# /// script
-# dependencies = [
-#   "google-generativeai>=0.8.3",
-#   "voyageai>=0.2.3",
-#   "qdrant-client==1.16.*",
-#   "langchain-text-splitters>=0.3.0",
-#   "pyyaml>=6.0",
-# ]
-# ///
 """Issue自動改善スクリプト - Phase 2実装（設定ファイル対応版）
 
 PEP-723対応: uvx で実行可能
@@ -182,18 +173,18 @@ def load_settings() -> ImproveIssueSettings:
         ValueError: 設定内容が不正な場合
     """
     # 設定ファイルパスの決定
-    config_path = os.environ.get("IMPROVE_ISSUE_CONFIG")
+    config_path = os.environ.get("ai_improve_issue_CONFIG")
     if config_path:
         config_file = Path(config_path)
     else:
         repo_root = find_repo_root()
-        config_file = repo_root / ".improve_issue.yml"
+        config_file = repo_root / ".ai_improve_issue.yml"
 
     if not config_file.exists():
         raise FileNotFoundError(
             f"設定ファイルが見つかりません: {config_file}\n"
-            f"環境変数 IMPROVE_ISSUE_CONFIG で設定ファイルパスを指定するか、\n"
-            f"リポジトリルートに .improve_issue.yml を配置してください。"
+            f"環境変数 ai_improve_issue_CONFIG で設定ファイルパスを指定するか、\n"
+            f"リポジトリルートに .ai_improve_issue.yml を配置してください。"
         )
 
     # YAML読み込み
@@ -450,7 +441,7 @@ class VoyageEmbeddingClient:
 class QdrantSearchClient:
     """Qdrant検索クライアント"""
 
-    COLLECTION_NAME = "improve-issues"
+    COLLECTION_NAME = "ai-improve-issues"
 
     def __init__(self, url: str, api_key: str):
         """
