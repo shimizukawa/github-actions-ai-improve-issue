@@ -4,9 +4,10 @@
 #   "voyageai>=0.2.3",
 #   "qdrant-client==1.16.*",
 #   "langchain-text-splitters>=0.3.0",
+#   "pyyaml>=6.0",
 # ]
 # ///
-"""Issue自動改善スクリプト - Phase 2実装
+"""Issue自動改善スクリプト - Phase 2実装（設定ファイル対応版）
 
 PEP-723対応: uvx で実行可能
 
@@ -26,9 +27,11 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Literal, Any
+from typing import Any
 
+import yaml
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import voyageai
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -42,10 +45,6 @@ from qdrant_client.models import (
     PointStruct,
     VectorParams,
 )
-
-
-# 型定義
-TemplateType = Literal["feature_request", "bug_report"]
 
 
 # ==================== 設定管理 ====================
@@ -123,35 +122,120 @@ class Config:
 config = Config()
 
 
-# テンプレートタイプに応じた役割と指示
-ROLE_AND_INSTRUCTIONS = {
-    "feature_request": """あなたはプロジェクト管理の専門家です。以下のIssue記述を、機能要件テンプレートに沿った具体的で詳細な内容に拡張してください。
+# ==================== テンプレート設定 ====================
 
-【重要な指示】
-- 抽象的な表現を避け、具体的に記述してください
-- Issue記述から推測できる範囲で詳細化してください
-- 不明な点は「要確認」として明示してください
-- Markdown形式で出力してください
-- 各項目は箇条書きで、少なくとも2-3項目記述してください""",
-    "bug_report": """あなたはソフトウェアテストの専門家です。以下のバグ報告を、詳細で再現可能な形式に拡張してください。
 
-【重要な指示】
-- 再現手順を具体的に記述してください
-- エラーメッセージやスクリーンショットの必要性を明示してください
-- Markdown形式で出力してください""",
-}
+@dataclasses.dataclass
+class TemplateConfig:
+    """テンプレート設定"""
+
+    name: str
+    issue_template_file: str
+    system_prompt: str
+    keywords: list[str]
+
+
+@dataclasses.dataclass
+class ImproveIssueSettings:
+    """Issue改善設定"""
+
+    templates: dict[str, TemplateConfig]
+    default_template: str
+
+    def validate(self):
+        """設定の妥当性をチェック"""
+        if not self.templates:
+            raise ValueError("Error: templates is empty")
+        if self.default_template not in self.templates:
+            raise ValueError(
+                f"Error: default_template '{self.default_template}' not found in templates"
+            )
+
+
+def load_settings() -> ImproveIssueSettings:
+    """設定ファイルを読み込む
+
+    Returns:
+        ImproveIssueSettings: 設定オブジェクト
+
+    Raises:
+        FileNotFoundError: 設定ファイルが見つからない場合
+        ValueError: 設定内容が不正な場合
+    """
+    # 設定ファイルパスの決定
+    config_path = os.environ.get("IMPROVE_ISSUE_CONFIG")
+    if config_path:
+        config_file = Path(config_path)
+    else:
+        # スクリプトの場所からリポジトリルートを推定
+        repo_root = Path(__file__).resolve().parents[2]
+        config_file = repo_root / ".improve_issue.yml"
+
+    if not config_file.exists():
+        raise FileNotFoundError(
+            f"設定ファイルが見つかりません: {config_file}\n"
+            f"環境変数 IMPROVE_ISSUE_CONFIG で設定ファイルパスを指定するか、\n"
+            f"リポジトリルートに .improve_issue.yml を配置してください。"
+        )
+
+    # YAML読み込み
+    with open(config_file, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    # バリデーション
+    if not data:
+        raise ValueError("設定ファイルが空です")
+
+    if "templates" not in data:
+        raise ValueError("設定ファイルに 'templates' が定義されていません")
+
+    if "default_template" not in data:
+        raise ValueError("設定ファイルに 'default_template' が定義されていません")
+
+    # テンプレート設定の構築
+    templates = {}
+    for name, tmpl_data in data["templates"].items():
+        if not isinstance(tmpl_data, dict):
+            raise ValueError(f"テンプレート '{name}' の定義が不正です")
+
+        required_fields = ["issue_template_file", "system_prompt", "keywords"]
+        for field in required_fields:
+            if field not in tmpl_data:
+                raise ValueError(
+                    f"テンプレート '{name}' に必須フィールド '{field}' がありません"
+                )
+
+        templates[name] = TemplateConfig(
+            name=name,
+            issue_template_file=tmpl_data["issue_template_file"],
+            system_prompt=tmpl_data["system_prompt"],
+            keywords=tmpl_data["keywords"],
+        )
+
+    settings = ImproveIssueSettings(
+        templates=templates,
+        default_template=data["default_template"],
+    )
+
+    settings.validate()
+
+    return settings
+
 
 # ==================== テンプレート読み込み ====================
 
 
-def load_template_content(template_name: str) -> str:
+def load_template_content(template: TemplateConfig) -> str:
     """ISSUE_TEMPLATEファイルから実際のテンプレート内容を読み込む"""
-    script_dir = Path(__file__).parent
-    repo_root = script_dir.parent.parent
-    template_file = repo_root / ".github" / "ISSUE_TEMPLATE" / f"{template_name}.md"
+    repo_root = Path(__file__).resolve().parents[2]
+    template_file = (
+        repo_root / ".github" / "ISSUE_TEMPLATE" / f"{template.issue_template_file}.md"
+    )
 
     if not template_file.exists():
-        return ""
+        raise FileNotFoundError(
+            f"Issueテンプレートファイルが見つかりません: {template_file}"
+        )
 
     with open(template_file, encoding="utf-8") as f:
         content = f.read()
@@ -179,6 +263,7 @@ def get_improve_prompt(
     issue_body: str,
     issue_title: str = "",
     similar_issues: list[dict[str, Any]] | None = None,
+    settings: ImproveIssueSettings | None = None,
 ) -> str:
     """テンプレートに応じたプロンプトを取得（RAG対応）
 
@@ -187,18 +272,18 @@ def get_improve_prompt(
         issue_body: Issue本文
         issue_title: Issueタイトル
         similar_issues: 類似Issue情報（RAG検索結果）
+        settings: 設定オブジェクト
 
     Returns:
         LLMプロンプト
     """
-    # テンプレートファイルから実際の内容を読み込む
-    template_content = load_template_content(template_name)
+    if settings is None:
+        raise ValueError("settings is required")
 
-    role = ROLE_AND_INSTRUCTIONS.get(
-        template_name, ROLE_AND_INSTRUCTIONS["feature_request"]
-    )
+    tmpl = settings.templates[template_name]
+    template_content = load_template_content(tmpl)
 
-    prompt = f"""{role}
+    prompt = f"""{tmpl.system_prompt}
 
 【Issue記述】
 タイトル: {issue_title}
@@ -232,30 +317,26 @@ def get_improve_prompt(
 class TemplateDetector:
     """Issue内容からテンプレートを判定"""
 
-    KEYWORDS: dict[TemplateType, list[str]] = {
-        "feature_request": ["機能", "追加", "変更", "改善", "したい", "欲しい", "必要"],
-        "bug_report": ["バグ", "エラー", "不具合", "動かない", "失敗", "問題"],
-    }
+    def __init__(self, settings: ImproveIssueSettings):
+        self.settings = settings
 
-    def detect(self, issue_body: str, issue_title: str = "") -> TemplateType:
+    def detect(self, issue_body: str, issue_title: str = "") -> str:
         """Issue本文とタイトルからテンプレートを判定（キーワードベース）"""
         text = f"{issue_title} {issue_body}".lower()
 
-        scores: dict[TemplateType, int] = {}
-        for template, keywords in self.KEYWORDS.items():
-            score = sum(1 for keyword in keywords if keyword in text)
-            scores[template] = score
+        best_template: str | None = None
+        best_score = -1
 
-        if not scores:
-            return "feature_request"
+        for name, tmpl in self.settings.templates.items():
+            score = sum(1 for kw in tmpl.keywords if kw.lower() in text)
+            if score > best_score:
+                best_score = score
+                best_template = name
 
-        selected_tmpl = max(scores, key=scores.get)
+        if best_template is None or best_score <= 0:
+            return self.settings.default_template
 
-        # スコアが0の場合（キーワードマッチなし）はデフォルトでfeature_request
-        if scores[selected_tmpl] == 0:
-            return "feature_request"
-
-        return selected_tmpl
+        return best_template
 
 
 # ==================== LLMクライアント ====================
@@ -276,15 +357,46 @@ class LLMClient:
         self.model = genai.GenerativeModel(model)
 
     def generate(self, prompt: str, max_tokens: int = 2000) -> str:
-        """プロンプトから文章を生成"""
+        """プロンプトから文章を生成
+
+        Returns:
+            生成されたテキスト、またはエラーメッセージ
+        """
+        # 安全性設定を緩和（技術的な内容に対応）
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        }
         response = self.model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=max_tokens,
                 temperature=0.7,
             ),
+            safety_settings=safety_settings,
         )
-        return response.text
+
+        try:
+            return response.text
+        except ValueError:
+            pass
+
+        # finish_reasonを確認してエラーメッセージを生成
+        print(f"Debug: finish_reason={response.candidates}")
+        finish_reason = None
+        if response.candidates:
+            finish_reason = response.candidates[0].finish_reason
+
+        if finish_reason == 2:  # SAFETY
+            return "⚠️ AIによる生成が安全性フィルターによりブロックされました。Issue内容を確認し、手動で記入してください。"
+        elif finish_reason == 3:  # RECITATION
+            return "⚠️ AIによる生成が著作権保護によりブロックされました。別の表現で記入してください。"
+        elif finish_reason == 4:  # OTHER
+            return "⚠️ AIによる生成が制限されました。手動で記入してください。"
+
+        return "⚠️ AIによる生成に失敗しました。手動で記入してください。"
 
 
 # ==================== RAGクライアント (Phase 2) ====================
@@ -349,7 +461,10 @@ class QdrantSearchClient:
             )
 
     def search_similar_issues(
-        self, query_vector: list[float], limit: int = 3
+        self,
+        query_vector: list[float],
+        limit: int = 3,
+        exclude_issue_number: int | None = None,
     ) -> list[dict[str, Any]]:
         """類似Issue検索（チャンク対応）
 
@@ -375,6 +490,9 @@ class QdrantSearchClient:
         issue_map = {}
         for result in points:
             issue_num = result.payload.get("issue_number")
+            # 除外対象のIssue番号をスキップ
+            if exclude_issue_number is not None and issue_num == exclude_issue_number:
+                continue
             if (
                 issue_num not in issue_map
                 or result.score > issue_map[issue_num]["similarity"]
@@ -679,6 +797,7 @@ def generate_improved_content(
     issue_title: str,
     api_key: str,
     similar_issues: list[dict[str, Any]] | None = None,
+    settings: ImproveIssueSettings | None = None,
 ) -> tuple[str, str]:
     """Issue内容を改善した例文を生成（RAG対応）
 
@@ -687,18 +806,24 @@ def generate_improved_content(
         issue_title: Issueタイトル
         api_key: LLM APIキー
         similar_issues: 類似Issue情報（RAG検索結果）
+        settings: 設定オブジェクト
 
     Returns:
         (improved_content, template_name): 改善された内容とテンプレート名
     """
+    if settings is None:
+        raise ValueError("settings is required")
+
     # テンプレート判定
-    detector = TemplateDetector()
+    detector = TemplateDetector(settings)
     template_name = detector.detect(issue_body, issue_title)
     print(f"Detected template: {template_name}")
 
     # LLM呼び出し
     client = LLMClient(api_key=api_key)
-    prompt = get_improve_prompt(template_name, issue_body, issue_title, similar_issues)
+    prompt = get_improve_prompt(
+        template_name, issue_body, issue_title, similar_issues, settings
+    )
     improved_content = client.generate(prompt)
     print("Content generated successfully")
 
@@ -759,13 +884,19 @@ def format_comment(
     return comment
 
 
-def index_all_issues(start: int = 1, end: int | None = None):
+def index_all_issues(
+    start: int = 1, end: int | None = None, settings: ImproveIssueSettings | None = None
+):
     """全Issueをインデックス登録（--index-issues モード）
 
     Args:
         start: 開始Issue番号
         end: 終了Issue番号（Noneの場合は全て）
+        settings: 設定オブジェクト
     """
+    if settings is None:
+        raise ValueError("settings is required")
+
     config.validate_for_github_operations()
     config.validate_for_rag_operations()
 
@@ -788,7 +919,7 @@ def index_all_issues(start: int = 1, end: int | None = None):
     qdrant_client.ensure_collection(vector_size=256)
 
     # テンプレート判定器
-    detector = TemplateDetector()
+    detector = TemplateDetector(settings)
 
     # 各Issueをインデックス登録
     success_count = 0
@@ -821,12 +952,18 @@ def index_all_issues(start: int = 1, end: int | None = None):
     print(f"Success: {success_count}/{len(issues)} issues")
 
 
-def update_single_issue(issue_number: int):
+def update_single_issue(
+    issue_number: int, settings: ImproveIssueSettings | None = None
+):
     """単一Issueをインデックス更新（--update-single-issue モード）
 
     Args:
         issue_number: Issue番号
+        settings: 設定オブジェクト
     """
+    if settings is None:
+        raise ValueError("settings is required")
+
     config.validate_for_github_operations()
     config.validate_for_rag_operations()
 
@@ -846,7 +983,7 @@ def update_single_issue(issue_number: int):
     qdrant_client.ensure_collection(vector_size=256)
 
     # テンプレート判定
-    detector = TemplateDetector()
+    detector = TemplateDetector(settings)
     template_type = detector.detect(issue["body"], issue["title"])
 
     # チャンク分割
@@ -871,6 +1008,14 @@ def update_single_issue(issue_number: int):
 
 
 def main():
+    # 設定ファイルを読み込み
+    try:
+        settings = load_settings()
+        print("設定ファイルを読み込みました")
+    except (FileNotFoundError, ValueError) as e:
+        print(str(e))
+        sys.exit(1)
+
     # 引数解析
     parser = argparse.ArgumentParser(description="Issue自動改善スクリプト (Phase 2)")
     parser.add_argument(
@@ -896,12 +1041,12 @@ def main():
 
     # RAGデータ生成モード
     if args.index_issues:
-        index_all_issues(start=args.start, end=args.end)
+        index_all_issues(start=args.start, end=args.end, settings=settings)
         sys.exit(0)
 
     # 単一Issue更新モード
     if args.update_single_issue:
-        update_single_issue(args.update_single_issue)
+        update_single_issue(args.update_single_issue, settings=settings)
         sys.exit(0)
 
     # 通常モード: Issue改善
@@ -937,8 +1082,10 @@ def main():
         query_text = f"{config.issue_title}\n{config.issue_body}"
         query_vector = voyage_client.generate_embedding(query_text, dimensions=256)
 
-        # 類似Issue検索
-        similar_issues = qdrant_client.search_similar_issues(query_vector, limit=3)
+        # 類似Issue検索（自分自身を除外）
+        similar_issues = qdrant_client.search_similar_issues(
+            query_vector, limit=3, exclude_issue_number=int(config.issue_number)
+        )
 
         if similar_issues:
             print(f"Found {len(similar_issues)} similar issues")
@@ -954,7 +1101,11 @@ def main():
 
     # 改善内容を生成
     improved_content, template_name = generate_improved_content(
-        config.issue_body, config.issue_title, config.llm_api_key, similar_issues
+        config.issue_body,
+        config.issue_title,
+        config.llm_api_key,
+        similar_issues,
+        settings,
     )
 
     # コメント用にフォーマット
@@ -982,7 +1133,7 @@ def main():
         sys.exit(0)
 
     print("Indexing current issue to RAG...")
-    detector = TemplateDetector()
+    detector = TemplateDetector(settings)
     template_type = detector.detect(config.issue_body, config.issue_title)
 
     voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)

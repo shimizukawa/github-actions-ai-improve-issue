@@ -31,7 +31,7 @@ jobs:
       - name: Improve issue content
         id: improve
         run: |
-          uv run .github/scripts/improve_issue.py
+          uv run -m github_actions_ai_improve_issue.main
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -75,7 +75,7 @@ jobs:
       
       - name: Update Qdrant index
         run: |
-          uv run .github/scripts/improve_issue.py --update-single-issue ${{ github.event.issue.number }}
+          uv run -m github_actions_ai_improve_issue.main --update-single-issue ${{ github.event.issue.number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
