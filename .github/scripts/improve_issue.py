@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Literal, Any
 
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import voyageai
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -53,24 +54,42 @@ TemplateType = Literal["feature_request", "bug_report"]
 
 @dataclasses.dataclass
 class Config:
-    """環境変数の一元管理クラス
-    """
+    """環境変数の一元管理クラス"""
+
     # GitHub関連（GitHub Actions実行時に自動設定）
-    github_repository: str = dataclasses.field(default_factory=lambda: os.environ.get("GITHUB_REPOSITORY", ""))
-    github_token: str = dataclasses.field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
+    github_repository: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("GITHUB_REPOSITORY", "")
+    )
+    github_token: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("GITHUB_TOKEN", "")
+    )
 
     # Issue情報（通常モード実行時に必要）
-    issue_body: str = dataclasses.field(default_factory=lambda: os.environ.get("ISSUE_BODY", ""))
-    issue_title: str = dataclasses.field(default_factory=lambda: os.environ.get("ISSUE_TITLE", ""))
-    issue_number: str = dataclasses.field(default_factory=lambda: os.environ.get("ISSUE_NUMBER", ""))
+    issue_body: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("ISSUE_BODY", "")
+    )
+    issue_title: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("ISSUE_TITLE", "")
+    )
+    issue_number: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("ISSUE_NUMBER", "")
+    )
 
     # LLM API（通常モード実行時に必須）
-    llm_api_key: str = dataclasses.field(default_factory=lambda: os.environ.get("LLM_API_KEY", ""))
+    llm_api_key: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("LLM_API_KEY", "")
+    )
 
     # RAG機能（オプション - 全て設定された場合のみ有効化）
-    qdrant_url: str  = dataclasses.field(default_factory=lambda: os.environ.get("QDRANT_URL", ""))
-    qdrant_api_key: str = dataclasses.field(default_factory=lambda: os.environ.get("QDRANT_API_KEY", ""))
-    voyage_api_key: str = dataclasses.field(default_factory=lambda: os.environ.get("VOYAGE_API_KEY", ""))
+    qdrant_url: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("QDRANT_URL", "")
+    )
+    qdrant_api_key: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("QDRANT_API_KEY", "")
+    )
+    voyage_api_key: str = dataclasses.field(
+        default_factory=lambda: os.environ.get("VOYAGE_API_KEY", "")
+    )
 
     @property
     def is_rag_enabled(self) -> bool:
@@ -99,6 +118,7 @@ class Config:
             raise ValueError("Error: QDRANT_URL not set")
         if not self.qdrant_api_key:
             raise ValueError("Error: QDRANT_API_KEY not set")
+
 
 # 設定を読み込み
 config = Config()
@@ -257,15 +277,46 @@ class LLMClient:
         self.model = genai.GenerativeModel(model)
 
     def generate(self, prompt: str, max_tokens: int = 2000) -> str:
-        """プロンプトから文章を生成"""
+        """プロンプトから文章を生成
+
+        Returns:
+            生成されたテキスト、またはエラーメッセージ
+        """
+        # 安全性設定を緩和（技術的な内容に対応）
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        }
         response = self.model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=max_tokens,
                 temperature=0.7,
             ),
+            safety_settings=safety_settings,
         )
-        return response.text
+
+        try:
+            return response.text
+        except ValueError:
+            pass
+
+        # finish_reasonを確認してエラーメッセージを生成
+        print(f"Debug: finish_reason={response.candidates}")
+        finish_reason = None
+        if response.candidates:
+            finish_reason = response.candidates[0].finish_reason
+
+        if finish_reason == 2:  # SAFETY
+            return "⚠️ AIによる生成が安全性フィルターによりブロックされました。Issue内容を確認し、手動で記入してください。"
+        elif finish_reason == 3:  # RECITATION
+            return "⚠️ AIによる生成が著作権保護によりブロックされました。別の表現で記入してください。"
+        elif finish_reason == 4:  # OTHER
+            return "⚠️ AIによる生成が制限されました。手動で記入してください。"
+
+        return "⚠️ AIによる生成に失敗しました。手動で記入してください。"
 
 
 # ==================== RAGクライアント (Phase 2) ====================
@@ -330,7 +381,10 @@ class QdrantSearchClient:
             )
 
     def search_similar_issues(
-        self, query_vector: list[float], limit: int = 3
+        self,
+        query_vector: list[float],
+        limit: int = 3,
+        exclude_issue_number: int | None = None,
     ) -> list[dict[str, Any]]:
         """類似Issue検索（チャンク対応）
 
@@ -356,6 +410,9 @@ class QdrantSearchClient:
         issue_map = {}
         for result in points:
             issue_num = result.payload.get("issue_number")
+            # 除外対象のIssue番号をスキップ
+            if exclude_issue_number is not None and issue_num == exclude_issue_number:
+                continue
             if (
                 issue_num not in issue_map
                 or result.score > issue_map[issue_num]["similarity"]
@@ -918,8 +975,10 @@ def main():
         query_text = f"{config.issue_title}\n{config.issue_body}"
         query_vector = voyage_client.generate_embedding(query_text, dimensions=256)
 
-        # 類似Issue検索
-        similar_issues = qdrant_client.search_similar_issues(query_vector, limit=3)
+        # 類似Issue検索（自分自身を除外）
+        similar_issues = qdrant_client.search_similar_issues(
+            query_vector, limit=3, exclude_issue_number=int(config.issue_number)
+        )
 
         if similar_issues:
             print(f"Found {len(similar_issues)} similar issues")
