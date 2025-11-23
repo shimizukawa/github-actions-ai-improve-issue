@@ -361,7 +361,7 @@ wheels = [
 [[package]]
 name = "github-actions-ai-improve-issue"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "google-generativeai" },
     { name = "langchain-text-splitters" },

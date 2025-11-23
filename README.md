@@ -30,6 +30,17 @@
 6. 例文を参考に、Issue本文を編集
 7. 処理完了後、Workflowが `ai-improve` ラベルを自動で削除（再度ラベルを付ければ再実行可能）
 
+### CLIからの実行
+```bash
+# インストールして実行
+$ pip install github-actions-ai-improve-issue
+$ improve-issue
+
+# GitHubから直接実行
+uvx --from git+https://github.com/shimizukawa/github-actions-ai-improve-issue improve-issue
+```
+
+
 ### ローカル検証（開発者向け）
 
 ```bash
