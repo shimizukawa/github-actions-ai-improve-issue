@@ -5,7 +5,7 @@ on:
     types: [labeled, edited, closed, reopened]
 
 jobs:
-  improve-issue:
+  ai-improve-issue:
     runs-on: ubuntu-slim
     timeout-minutes: 3
     
@@ -31,12 +31,12 @@ jobs:
       - name: Improve issue content
         id: improve
         run: |
-          uv run .github/scripts/improve_issue.py
+          uv run -m ai_improve_issue
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           # RAG環境変数（設定されていない場合はRAG未使用モードで動作）
@@ -75,7 +75,7 @@ jobs:
       
       - name: Update Qdrant index
         run: |
-          uv run .github/scripts/improve_issue.py --update-single-issue ${{ github.event.issue.number }}
+          uv run -m ai_improve_issue --update-single-issue ${{ github.event.issue.number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}

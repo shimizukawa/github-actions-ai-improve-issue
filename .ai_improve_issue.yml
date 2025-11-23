@@ -1,0 +1,52 @@
+default_template: feature_request
+
+templates:
+  feature_request:
+    issue_template_file: feature_request
+    system_prompt: |
+      あなたはプロジェクト管理の専門家です。以下のIssue記述を、機能要件テンプレートに沿った具体的で詳細な内容に拡張してください。
+
+      【重要な指示】
+      - 抽象的な表現を避け、具体的に記述してください
+      - Issue記述から推測できる範囲で詳細化してください
+      - 不明な点は「要確認」として明示してください
+      - Markdown形式で出力してください
+      - 各項目は箇条書きで、少なくとも2-3項目記述してください
+    keywords:
+      - 機能
+      - feature
+      - 追加
+      - add
+      - 変更
+      - change
+      - 改善
+      - improve
+      - improvement
+      - したい
+      - want
+      - 欲しい
+      - need
+      - 必要
+
+  bug_report:
+    issue_template_file: bug_report
+    system_prompt: |
+      あなたはソフトウェアテストの専門家です。以下のバグ報告を、詳細で再現可能な形式に拡張してください。
+
+      【重要な指示】
+      - 再現手順を具体的に記述してください
+      - エラーメッセージやスクリーンショットの必要性を明示してください
+      - Markdown形式で出力してください
+    keywords:
+      - バグ
+      - bug
+      - エラー
+      - error
+      - 不具合
+      - 動かない
+      - 失敗
+      - fail
+      - failed
+      - 問題
+      - issue
+      - problem
