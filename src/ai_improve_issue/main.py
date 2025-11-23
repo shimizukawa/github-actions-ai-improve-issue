@@ -122,14 +122,15 @@ def find_repo_root() -> Path:
     Returns:
         Path: リポジトリルートディレクトリ
     """
-    # .git ディレクトリを探す
-    current = Path(__file__).resolve()
+    # カレントディレクトリから.gitディレクトリを探す
+    # (uvx実行時は__file__がsite-packagesを指すため、cwdを起点とする)
+    current = Path.cwd().resolve()
     for parent in [current] + list(current.parents):
         if (parent / ".git").exists():
             return parent
 
-    # .git が見つからない場合は、スクリプトから2階層上をデフォルトとする
-    return Path(__file__).resolve().parents[2]
+    # .git が見つからない場合はカレントディレクトリを返す
+    return current
 
 
 # ==================== テンプレート設定 ====================
@@ -173,7 +174,7 @@ def load_settings() -> ImproveIssueSettings:
         ValueError: 設定内容が不正な場合
     """
     # 設定ファイルパスの決定
-    config_path = os.environ.get("ai_improve_issue_CONFIG")
+    config_path = os.environ.get("AI_IMPROVE_ISSUE_CONFIG")
     if config_path:
         config_file = Path(config_path)
     else:
@@ -183,7 +184,7 @@ def load_settings() -> ImproveIssueSettings:
     if not config_file.exists():
         raise FileNotFoundError(
             f"設定ファイルが見つかりません: {config_file}\n"
-            f"環境変数 ai_improve_issue_CONFIG で設定ファイルパスを指定するか、\n"
+            f"環境変数 AI_IMPROVE_ISSUE_CONFIG で設定ファイルパスを指定するか、\n"
             f"リポジトリルートに .ai_improve_issue.yml を配置してください。"
         )
 

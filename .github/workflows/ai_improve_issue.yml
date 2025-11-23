@@ -1,4 +1,4 @@
-name: Issue Auto Improve (Phase 2)
+name: AI Improve Issue
 
 on:
   issues:
