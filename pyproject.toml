@@ -5,11 +5,11 @@ description = "A feature that automatically generates specific text following an
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "google-generativeai>=0.8.3",
     "voyageai>=0.2.3",
     "qdrant-client==1.16.*",
     "langchain-text-splitters>=0.3.0",
     "pyyaml>=6.0",
+    "google-genai>=1.52.0",
 ]
 
 [project.scripts]

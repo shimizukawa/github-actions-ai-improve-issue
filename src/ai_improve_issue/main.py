@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google import genai
+from google.genai.types import HarmCategory, HarmBlockThreshold
 import voyageai
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -274,7 +274,7 @@ def get_improve_prompt(
     issue_title: str = "",
     similar_issues: list[dict[str, Any]] | None = None,
     settings: ImproveIssueSettings | None = None,
-) -> str:
+) -> tuple[str, str]:
     """テンプレートに応じたプロンプトを取得（RAG対応）
 
     Args:
@@ -285,29 +285,36 @@ def get_improve_prompt(
         settings: 設定オブジェクト
 
     Returns:
-        LLMプロンプト
+        system_instruction, prompt:
     """
     if settings is None:
         raise ValueError("settings is required")
 
     tmpl = settings.templates[template_name]
     template_content = load_template_content(tmpl)
+    system_instruction = f"""
+{tmpl.system_prompt}
 
-    prompt = f"""{tmpl.system_prompt}
+【Issue記述】について、【類似する過去Issue】の内容を参考にして、概要を敬体でまとめてください。
+また、【類似する過去Issue】に類似する内容があるか判定し、【## 類似Issue】セクションにそのidを出力してください。
+もし存在しない場合は「なし」と出力してください。
+出力形式以外の文章は不要です。
+"""
 
+    prompt = f"""
 【Issue記述】
 タイトル: {issue_title}
 本文: {issue_body}
 
-【出力テンプレート】
-以下のテンプレートに沿って具体的に記述してください：
-
+【テンプレート】
 {template_content}
 """
 
     # RAG検索結果があれば追加
     if similar_issues and len(similar_issues) > 0:
-        similar_info = "\n\n【参考情報】\n以下の過去Issueを参考にしてください：\n"
+        similar_info = (
+            "\n\n【類似する過去Issue】\n以下の過去Issueを参考にしてください：\n"
+        )
         for i, issue in enumerate(similar_issues, 1):
             similar_info += f"""
 【参考Issue {i}】
@@ -318,7 +325,7 @@ def get_improve_prompt(
         similar_info += "\n上記の参考Issueから、記述スタイルや必要な情報項目を学び、より具体的で実用的な例文を生成してください。"
         prompt += similar_info
 
-    return prompt
+    return system_instruction, prompt
 
 
 # ==================== テンプレート判定 ====================
@@ -363,29 +370,45 @@ class LLMClient:
                 - Phase 1-2: 'gemini-2.5-flash' (コスパ良好)
                 - Phase 2: 'claude-3.7-sonnet' (品質重視)
         """
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(model)
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model
 
-    def generate(self, prompt: str, max_tokens: int = 5000) -> str:
+    def generate(
+        self, system_instruction: str, prompt: str, max_tokens: int = 5000
+    ) -> str:
         """プロンプトから文章を生成
 
         Returns:
             生成されたテキスト、またはエラーメッセージ
         """
         # 安全性設定を緩和（技術的な内容に対応）
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        }
-        response = self.model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
+        safety_settings = [
+            genai.types.SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+            genai.types.SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+            genai.types.SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+            genai.types.SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            ),
+        ]
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=[system_instruction],
                 max_output_tokens=max_tokens,
                 temperature=0.7,
+                safety_settings=safety_settings,
             ),
-            safety_settings=safety_settings,
         )
 
         try:
@@ -830,10 +853,10 @@ def generate_improved_content(
 
     # LLM呼び出し
     client = LLMClient(api_key=api_key)
-    prompt = get_improve_prompt(
+    system_instruction, prompt = get_improve_prompt(
         template_name, issue_body, issue_title, similar_issues, settings
     )
-    improved_content = client.generate(prompt)
+    improved_content = client.generate(system_instruction, prompt)
     print("Content generated successfully")
 
     return improved_content, template_name
