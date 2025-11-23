@@ -31,12 +31,33 @@
 7. 処理完了後、Workflowが `ai-improve` ラベルを自動で削除（再度ラベルを付ければ再実行可能）
 
 ### CLIからの実行
+
+CLIコマンドを実行する前に、以下の環境変数を設定する必要があります：
+
+- `ISSUE_TITLE`：Issueのタイトル
+- `ISSUE_BODY`：Issueの本文
+- `ISSUE_NUMBER`：Issue番号
+- `LLM_API_KEY`：Gemini APIキー
+
+これらの環境変数が未設定の場合、コマンド実行時にエラーが表示されます。
+
+#### 例: 必要な環境変数を設定してCLIを実行
+
 ```bash
 # インストールして実行
 $ pip install ai-improve-issue
-$ ai-improve-issue
 
-# GitHubから直接実行
+# 必要な環境変数を設定
+export ISSUE_TITLE="Mermaid図の拡大縮小機能"
+export ISSUE_BODY="ページ編集 でMermaid図の部分だけ別ウインドウで表示して拡大縮小したい。ページ全体の編集ではプレビューの縦位置がずれてしまうため使いづらい"
+export ISSUE_NUMBER="123"
+export LLM_API_KEY="your-gemini-api-key"
+
+# コマンドを実行
+$ ai-improve-issue
+```
+
+# GitHubから直接実行する場合も同様に環境変数を設定してください
 uvx --from git+https://github.com/shimizukawa/ai-improve-issue ai-improve-issue
 ```
 
