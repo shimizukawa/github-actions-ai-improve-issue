@@ -366,7 +366,7 @@ class LLMClient:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(model)
 
-    def generate(self, prompt: str, max_tokens: int = 2000) -> str:
+    def generate(self, prompt: str, max_tokens: int = 5000) -> str:
         """プロンプトから文章を生成
 
         Returns:
