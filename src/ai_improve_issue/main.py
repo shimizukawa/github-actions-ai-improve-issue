@@ -442,7 +442,7 @@ class TextProcessAgent:
 
         name = selected.get("template", "")
         if name not in settings.templates:
-            print("不明なテンプレート名。デフォルトテンプレートを使用します。")
+            print(f"不明なテンプレート名 '{name}'。有効なテンプレート: {list(settings.templates.keys())}。デフォルトテンプレートを使用します。")
             return settings.default_template
 
         return name
