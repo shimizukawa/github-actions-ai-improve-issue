@@ -13,6 +13,7 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import sys
 import subprocess
 import tempfile
@@ -328,50 +329,123 @@ def get_improve_prompt(
     return system_instruction, prompt
 
 
-# ==================== テンプレート判定 ====================
-
-
-class TemplateDetector:
-    """Issue内容からテンプレートを判定"""
-
-    def __init__(self, settings: ImproveIssueSettings):
-        self.settings = settings
-
-    def detect(self, issue_body: str, issue_title: str = "") -> str:
-        """Issue本文とタイトルからテンプレートを判定（キーワードベース）"""
-        text = f"{issue_title} {issue_body}".lower()
-
-        best_template: str | None = None
-        best_score = -1
-
-        for name, tmpl in self.settings.templates.items():
-            score = sum(1 for kw in tmpl.keywords if kw.lower() in text)
-            if score > best_score:
-                best_score = score
-                best_template = name
-
-        if best_template is None or best_score <= 0:
-            return self.settings.default_template
-
-        return best_template
-
-
 # ==================== LLMクライアント ====================
 
 
-class LLMClient:
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+class TextProcessAgent:
+    """テキスト処理エージェント（テンプレート判定と文章生成）"""
+
+    # 安全性設定を緩和（技術的な内容に対応）
+    _SAFETY_SETTINGS = [
+        genai.types.SafetySetting(
+            category=HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        ),
+        genai.types.SafetySetting(
+            category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        ),
+        genai.types.SafetySetting(
+            category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        ),
+        genai.types.SafetySetting(
+            category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        ),
+    ]
+
+    def __init__(self, llm_api_key: str, model: str = "gemini-2.5-flash"):
         """LLMクライアント
 
         Args:
-            api_key: APIキー
+            llm_api_key: APIキー
             model: モデル名（2025年11月時点の推奨）
                 - Phase 0: 'gemini-2.0-flash-lite' (検証用、極低コスト)
                 - Phase 1-2: 'gemini-2.5-flash' (コスパ良好)
                 - Phase 2: 'claude-3.7-sonnet' (品質重視)
         """
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=llm_api_key)
         self.model_name = model
+
+    def detect_template(
+        self, issue_body: str, issue_title: str, settings: ImproveIssueSettings
+    ) -> str:
+        """Issue本文とタイトルからテンプレートを判定（LLMベース単一選択）
+
+        Args:
+            issue_body: Issue本文
+            issue_title: Issueタイトル
+            settings: 設定オブジェクト
+
+        Returns:
+            テンプレート名（失敗時や曖昧時は `default_template`）
+        """
+        # テンプレート情報を要約してLLMに渡す
+        tmpl_summaries: list[dict[str, Any]] = []
+        for name, tmpl in settings.templates.items():
+            sp = (tmpl.system_prompt or "").strip()
+            if len(sp) > 300:
+                sp = sp[:300]
+            kws = (tmpl.keywords or [])[:10]
+            tmpl_summaries.append(
+                {
+                    "name": name,
+                    "keywords": kws,
+                    "system_prompt": sp,
+                }
+            )
+
+        system_instruction = (
+            "あなたはIssueの内容から最適なテンプレートを1つだけ選ぶ分類器です。\n"
+            "提供されたテンプレート候補の中から、記述の目的・構造に最も適合するものを厳密に1件選んでください。\n"
+            "出力はJSONフォーマットデータのみ、追加説明は禁止です。"
+        )
+
+        prompt = (
+            "【Issue】\n"
+            f"タイトル: {issue_title}\n"
+            f"本文: {issue_body}\n\n"
+            "【テンプレート候補一覧(JSON)】\n"
+            f"{json.dumps(tmpl_summaries, ensure_ascii=False)}\n\n"
+            "以下の形式で厳密に1件のみ出力してください。\n"
+            '{"template": "<name>"}'
+        )
+
+        # 低トークン・低温度で分類実行（API呼び出しとtext取得のみtry）
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=[system_instruction],
+                max_output_tokens=256,
+                temperature=0.1,
+                safety_settings=self._SAFETY_SETTINGS,
+            ),
+        )
+
+        try:
+            text = response.text or ""
+        except ValueError:
+            print("response.text 取得でエラー。デフォルトテンプレートを使用します。")
+            return settings.default_template
+
+        print(f"選択された内容: {text=}")
+        # {.*} 部分のみ抽出
+        text = re.sub(r"(?s).*?(\{.*\}).*", r"\1", text)
+
+        try:
+            selected: dict[str, str] = json.loads(text)
+        except json.JSONDecodeError:
+            print("JSONデコードエラー。デフォルトテンプレートを使用します。")
+            return settings.default_template
+
+        name = selected.get("template", "")
+        if name not in settings.templates:
+            print("不明なテンプレート名。デフォルトテンプレートを使用します。")
+            return settings.default_template
+
+        return name
 
     def generate(
         self, system_instruction: str, prompt: str, max_tokens: int = 5000
@@ -381,25 +455,6 @@ class LLMClient:
         Returns:
             生成されたテキスト、またはエラーメッセージ
         """
-        # 安全性設定を緩和（技術的な内容に対応）
-        safety_settings = [
-            genai.types.SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            ),
-            genai.types.SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            ),
-            genai.types.SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            ),
-            genai.types.SafetySetting(
-                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            ),
-        ]
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=prompt,
@@ -407,7 +462,7 @@ class LLMClient:
                 system_instruction=[system_instruction],
                 max_output_tokens=max_tokens,
                 temperature=0.7,
-                safety_settings=safety_settings,
+                safety_settings=self._SAFETY_SETTINGS,
             ),
         )
 
@@ -538,7 +593,6 @@ class QdrantSearchClient:
                     "issue_number": issue_num,
                     "issue_title": result.payload.get("issue_title", ""),
                     "issue_body": issue_body[:500],
-                    "template_type": result.payload.get("template_type", ""),
                     "state": result.payload.get("state", ""),
                     "url": result.payload.get("url", ""),
                     "similarity": result.score,
@@ -557,7 +611,6 @@ class QdrantSearchClient:
         chunks: list[str],
         vectors: list[list[float]],
         title: str,
-        template_type: str,
         state: str,
         url: str,
         labels: list[str],
@@ -569,7 +622,6 @@ class QdrantSearchClient:
             chunks: Issue本文のチャンクリスト
             vectors: 各チャンクのEmbeddingベクトルリスト
             title: Issueタイトル
-            template_type: テンプレートタイプ
             state: Issueステート（open/closed）
             url: IssueのURL
             labels: ラベルリスト
@@ -621,7 +673,6 @@ class QdrantSearchClient:
                     "chunk_index": i,
                     "issue_title": title,
                     "issue_body_chunk": chunk,
-                    "template_type": template_type,
                     "state": state,
                     "url": url,
                     "labels": labels,
@@ -827,7 +878,7 @@ def post_comment_via_gh(issue_number: str, content: str) -> None:
 def generate_improved_content(
     issue_body: str,
     issue_title: str,
-    api_key: str,
+    llm_api_key: str,
     similar_issues: list[dict[str, Any]] | None = None,
     settings: ImproveIssueSettings | None = None,
 ) -> tuple[str, str]:
@@ -836,7 +887,7 @@ def generate_improved_content(
     Args:
         issue_body: Issue本文
         issue_title: Issueタイトル
-        api_key: LLM APIキー
+        llm_api_key: LLM APIキー
         similar_issues: 類似Issue情報（RAG検索結果）
         settings: 設定オブジェクト
 
@@ -846,13 +897,14 @@ def generate_improved_content(
     if settings is None:
         raise ValueError("settings is required")
 
+    # LLMクライアント初期化
+    client = TextProcessAgent(llm_api_key=llm_api_key)
+
     # テンプレート判定
-    detector = TemplateDetector(settings)
-    template_name = detector.detect(issue_body, issue_title)
+    template_name = client.detect_template(issue_body, issue_title, settings)
     print(f"Detected template: {template_name}")
 
-    # LLM呼び出し
-    client = LLMClient(api_key=api_key)
+    # 文章生成
     system_instruction, prompt = get_improve_prompt(
         template_name, issue_body, issue_title, similar_issues, settings
     )
@@ -950,9 +1002,6 @@ def index_all_issues(
     )
     qdrant_client.ensure_collection(vector_size=256)
 
-    # テンプレート判定器
-    detector = TemplateDetector(settings)
-
     # 各Issueをインデックス登録
     success_count = 0
     for i, issue in enumerate(issues, 1):
@@ -964,16 +1013,12 @@ def index_all_issues(
         # 各チャンクのEmbeddingベクトル生成
         vectors = create_embeddings_for_chunks(chunks, voyage_client, dimensions=256)
 
-        # テンプレート判定
-        template_type = detector.detect(issue["body"], issue["title"])
-
         # Qdrantに登録
         qdrant_client.upsert_issue_chunks(
             issue_number=issue["number"],
             chunks=chunks,
             vectors=vectors,
             title=issue["title"],
-            template_type=template_type,
             state=issue["state"],
             url=issue["url"],
             labels=issue.get("labels", []),
@@ -1014,10 +1059,6 @@ def update_single_issue(
     )
     qdrant_client.ensure_collection(vector_size=256)
 
-    # テンプレート判定
-    detector = TemplateDetector(settings)
-    template_type = detector.detect(issue["body"], issue["title"])
-
     # チャンク分割
     chunks = create_issue_chunks(issue["title"], issue["body"])
 
@@ -1030,7 +1071,6 @@ def update_single_issue(
         chunks=chunks,
         vectors=vectors,
         title=issue["title"],
-        template_type=template_type,
         state=issue["state"],
         url=issue["url"],
         labels=issue.get("labels", []),
@@ -1165,9 +1205,6 @@ def main():
         sys.exit(0)
 
     print("Indexing current issue to RAG...")
-    detector = TemplateDetector(settings)
-    template_type = detector.detect(config.issue_body, config.issue_title)
-
     voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
         url=config.qdrant_url, api_key=config.qdrant_api_key
@@ -1192,7 +1229,6 @@ def main():
         chunks=chunks,
         vectors=vectors,
         title=config.issue_title,
-        template_type=template_type,
         state="open",
         url=issue_url,
         labels=[],
