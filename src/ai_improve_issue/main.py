@@ -356,7 +356,7 @@ class TextProcessAgent:
     ]
 
     def __init__(self, llm_api_key: str, model: str = "gemini-2.5-flash"):
-        """LLMクライアント
+        """テキスト処理エージェント（テンプレート判定と文章生成を担当するLLMクライアント）
 
         Args:
             llm_api_key: APIキー
