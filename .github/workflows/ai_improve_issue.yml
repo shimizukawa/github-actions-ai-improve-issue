@@ -43,6 +43,8 @@ jobs:
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          # 任意: コレクション名（未設定時は ai-improve-issues を使用）
+          QDRANT_COLLECTION_NAME: ${{ vars.QDRANT_COLLECTION_NAME }}
       
       - name: Remove ai-improve label on success
         if: success()
@@ -82,4 +84,5 @@ jobs:
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          QDRANT_COLLECTION_NAME: ${{ vars.QDRANT_COLLECTION_NAME }}
         continue-on-error: true  # RAG未設定時もエラーとしない

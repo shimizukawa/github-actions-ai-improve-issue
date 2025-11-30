@@ -31,6 +31,7 @@
 - `QDRANT_URL`：Qdrant CloudのURL（RAG機能利用時）
 - `QDRANT_API_KEY`：Qdrant APIキー（RAG機能利用時）
 - `VOYAGE_API_KEY`：Voyage AI APIキー（RAG機能利用時）
+- `QDRANT_COLLECTION_NAME`：Qdrantのコレクション名（未指定時は `ai-improve-issues` を使用）
 
 
 ### 通常の利用（GitHub Actions）
@@ -172,17 +173,16 @@ Issue本文とタイトルから、設定ファイルで定義されたテンプ
 
 ## 設定
 
-### 必要なGitHub Secrets
+### 必要なGitHub 環境変数/Secrets
 
-#### 必須（Phase 1機能）
 - `GEMINI_API_KEY`: Google Gemini APIキー
 
-#### オプション（Phase 2 RAG機能）
-以下のSecretsを設定すると、RAG機能が有効になります。未設定の場合はPhase 1モード（RAG未使用）で動作します。
+以下のSecretsを設定すると、RAG機能が有効になります。未設定の場合はRAGを使用しません。
 
 - `QDRANT_URL`: Qdrant CloudのURL
 - `QDRANT_API_KEY`: Qdrant APIキー
 - `VOYAGE_API_KEY`: Voyage AI APIキー
+- `QDRANT_COLLECTION_NAME` 未設定時は `ai-improve-issues`
 
 ### ラベルによる制御
 
@@ -251,6 +251,7 @@ export GITHUB_REPOSITORY="owner/repo"
 export QDRANT_URL="https://xxx.qdrant.io"
 export QDRANT_API_KEY="your-qdrant-api-key"
 export VOYAGE_API_KEY="your-voyage-api-key"
+export QDRANT_COLLECTION_NAME="ai-improve-issues"
 
 # 全Issueをインデックス
 uv run -m ai_improve_issue --index-issues

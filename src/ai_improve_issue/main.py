@@ -80,6 +80,11 @@ class Config:
     voyage_api_key: str = dataclasses.field(
         default_factory=lambda: os.environ.get("VOYAGE_API_KEY", "")
     )
+    qdrant_collection_name: str = dataclasses.field(
+        default_factory=lambda: os.environ.get(
+            "QDRANT_COLLECTION_NAME", "ai-improve-issues"
+        )
+    )
 
     @property
     def is_rag_enabled(self) -> bool:
@@ -526,29 +531,31 @@ class VoyageEmbeddingClient:
 class QdrantSearchClient:
     """Qdrant検索クライアント"""
 
-    COLLECTION_NAME = "ai-improve-issues"
+    def __init__(
+        self, url: str, api_key: str, collection_name: str = "ai-improve-issues"
+    ):
+        """Qdrantクライアント初期化
 
-    def __init__(self, url: str, api_key: str):
-        """
         Args:
             url: Qdrant CloudのURL
             api_key: Qdrant APIキー
+            collection_name: コレクション名（環境変数で上書き可能）
         """
         self.client = QdrantClient(url=url, api_key=api_key)
+        self.collection_name = collection_name
 
     def ensure_collection(self, vector_size: int = 256):
         """コレクションが存在することを確認、なければ作成"""
         collections = self.client.get_collections().collections
         collection_names = [col.name for col in collections]
-
-        if self.COLLECTION_NAME not in collection_names:
+        if self.collection_name not in collection_names:
             self.client.create_collection(
-                collection_name=self.COLLECTION_NAME,
+                collection_name=self.collection_name,
                 vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
             )
-            print(f"Collection '{self.COLLECTION_NAME}' created")
+            print(f"Collection '{self.collection_name}' created")
             self.client.create_payload_index(
-                collection_name=self.COLLECTION_NAME,
+                collection_name=self.collection_name,
                 field_name="issue_number",
                 field_schema=PayloadSchemaType.INTEGER,
             )
@@ -570,7 +577,7 @@ class QdrantSearchClient:
         """
         # より多くのチャンクを取得してIssueごとに集約
         response = self.client.query_points(
-            collection_name=self.COLLECTION_NAME,
+            collection_name=self.collection_name,
             query=query_vector,
             limit=limit * 5,  # 余裕を持って取得
         )
@@ -637,7 +644,7 @@ class QdrantSearchClient:
         offset: dict | None = None
         while True:
             existing_points, next_offset = self.client.scroll(
-                collection_name=self.COLLECTION_NAME,
+                collection_name=self.collection_name,
                 scroll_filter=Filter(
                     must=[
                         FieldCondition(
@@ -664,7 +671,7 @@ class QdrantSearchClient:
 
         if ids_to_delete:
             self.client.delete(
-                collection_name=self.COLLECTION_NAME,
+                collection_name=self.collection_name,
                 points_selector=PointIdsList(points=ids_to_delete),
             )
 
@@ -686,7 +693,7 @@ class QdrantSearchClient:
             )
             points.append(point)
 
-        self.client.upsert(collection_name=self.COLLECTION_NAME, points=points)
+        self.client.upsert(collection_name=self.collection_name, points=points)
         print(f"Issue #{issue_number} indexed with {len(chunks)} chunks")
 
 
@@ -1004,7 +1011,9 @@ def index_all_issues(
     # クライアント初期化
     voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
-        url=config.qdrant_url, api_key=config.qdrant_api_key
+        url=config.qdrant_url,
+        api_key=config.qdrant_api_key,
+        collection_name=config.qdrant_collection_name,
     )
     qdrant_client.ensure_collection(vector_size=256)
 
@@ -1061,7 +1070,9 @@ def update_single_issue(
     # クライアント初期化
     voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
-        url=config.qdrant_url, api_key=config.qdrant_api_key
+        url=config.qdrant_url,
+        api_key=config.qdrant_api_key,
+        collection_name=config.qdrant_collection_name,
     )
     qdrant_client.ensure_collection(vector_size=256)
 
@@ -1152,7 +1163,9 @@ def main():
         # RAG検索
         voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
         qdrant_client = QdrantSearchClient(
-            url=config.qdrant_url, api_key=config.qdrant_api_key
+            url=config.qdrant_url,
+            api_key=config.qdrant_api_key,
+            collection_name=config.qdrant_collection_name,
         )
         qdrant_client.ensure_collection(vector_size=256)
 
@@ -1213,7 +1226,9 @@ def main():
     print("Indexing current issue to RAG...")
     voyage_client = VoyageEmbeddingClient(api_key=config.voyage_api_key)
     qdrant_client = QdrantSearchClient(
-        url=config.qdrant_url, api_key=config.qdrant_api_key
+        url=config.qdrant_url,
+        api_key=config.qdrant_api_key,
+        collection_name=config.qdrant_collection_name,
     )
     qdrant_client.ensure_collection(vector_size=256)
 
