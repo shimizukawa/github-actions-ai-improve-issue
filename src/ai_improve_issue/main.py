@@ -427,7 +427,9 @@ class TextProcessAgent:
         try:
             text = response.text or ""
         except ValueError as e:
-            print(f"response.text 取得でエラー ({e})。デフォルトテンプレートを使用します。")
+            print(
+                f"response.text 取得でエラー ({e})。デフォルトテンプレートを使用します。"
+            )
             return settings.default_template
 
         print(f"選択された内容: {text=}")
@@ -437,12 +439,16 @@ class TextProcessAgent:
         try:
             selected: dict[str, str] = json.loads(text)
         except json.JSONDecodeError as e:
-            print(f"JSONデコードエラー: {e}。テキスト: {text}。デフォルトテンプレートを使用します。")
+            print(
+                f"JSONデコードエラー: {e}。テキスト: {text}。デフォルトテンプレートを使用します。"
+            )
             return settings.default_template
 
         name = selected.get("template", "")
         if name not in settings.templates:
-            print(f"不明なテンプレート名 '{name}'。有効なテンプレート: {list(settings.templates.keys())}。デフォルトテンプレートを使用します。")
+            print(
+                f"不明なテンプレート名 '{name}'。有効なテンプレート: {list(settings.templates.keys())}。デフォルトテンプレートを使用します。"
+            )
             return settings.default_template
 
         return name
